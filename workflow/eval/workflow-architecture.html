@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex ↔ Claude 复利工作流系统 v1.3.0</title>
+<style>
+  :root {
+    --bg: #080c12;
+    --surface: #11171f;
+    --surface2: #18202b;
+    --border: #1e2a3a;
+    --gold: #d4a574;
+    --gold-dim: #8b6914;
+    --green: #27ae60;
+    --green-dim: #1a3a2a;
+    --red: #e74c3c;
+    --red-dim: #3a1a1a;
+    --blue: #3498db;
+    --blue-dim: #1a2a3a;
+    --text: #c8d0da;
+    --text-dim: #6a7a8e;
+    --text-bright: #e8edf3;
+    --mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+    --sans: 'DM Sans', 'Noto Sans SC', sans-serif;
+    --radius: 8px;
+    --radius-lg: 14px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.65;
+    font-size: 15px;
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 40px 20px;
+    background: radial-gradient(ellipse at 50% 30%, rgba(212,165,116,0.08) 0%, transparent 70%),
+                radial-gradient(ellipse at 80% 70%, rgba(52,152,219,0.05) 0%, transparent 60%),
+                linear-gradient(180deg, var(--bg) 0%, #0d1520 100%);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; top:0; left:0; right:0; bottom:0;
+    background-image:
+      linear-gradient(rgba(212,165,116,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(212,165,116,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  }
+  .hero-content { position: relative; z-index:1; max-width: 900px; }
+  .hero-badge {
+    display: inline-block; padding: 4px 14px; border-radius: 20px;
+    background: rgba(212,165,116,0.12); border: 1px solid var(--gold-dim);
+    color: var(--gold); font-size: 13px; font-family: var(--mono); margin-bottom: 24px;
+    letter-spacing: 0.5px;
+  }
+  .hero h1 {
+    font-size: clamp(32px, 6vw, 56px); font-weight: 700; color: var(--text-bright);
+    line-height: 1.2; margin-bottom: 16px; letter-spacing: -0.5px;
+  }
+  .hero h1 span { color: var(--gold); }
+  .hero-sub {
+    font-size: 18px; color: var(--text-dim); margin-bottom: 36px; max-width: 600px;
+    margin-left: auto; margin-right: auto;
+  }
+  .hero-stats { display: flex; gap: 32px; justify-content: center; flex-wrap: wrap; }
+  .hero-stat { text-align: center; }
+  .hero-stat .num { font-size: 36px; font-weight: 700; color: var(--gold); font-family: var(--mono); }
+  .hero-stat .lbl { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+
+  /* ===== NAV ===== */
+  .nav {
+    position: sticky; top:0; z-index:100; background: rgba(8,12,18,0.85);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+    padding: 10px 0; overflow-x: auto;
+  }
+  .nav-inner { max-width: 1200px; margin:0 auto; display:flex; gap:6px; padding:0 20px; }
+  .nav a {
+    color: var(--text-dim); text-decoration: none; font-size: 13px;
+    padding: 6px 14px; border-radius: 6px; white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .nav a:hover { color: var(--text-bright); background: var(--surface2); }
+
+  /* ===== SECTIONS ===== */
+  .section { max-width: 1200px; margin: 0 auto; padding: 72px 20px; }
+  .section-header { margin-bottom: 40px; }
+  .section-num { font-family: var(--mono); font-size: 13px; color: var(--gold); letter-spacing: 1px; margin-bottom: 8px; }
+  .section-title { font-size: 28px; font-weight: 700; color: var(--text-bright); margin-bottom: 8px; }
+  .section-desc { color: var(--text-dim); max-width: 700px; }
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 60px 0; }
+
+  /* ===== 3-LAYER CARDS ===== */
+  .layer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+  .layer-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 28px; position: relative; overflow: hidden;
+    transition: border-color 0.3s, transform 0.3s;
+  }
+  .layer-card:hover { border-color: var(--gold-dim); transform: translateY(-2px); }
+  .layer-card.l1 { border-top: 3px solid var(--green); }
+  .layer-card.l2 { border-top: 3px solid var(--gold); }
+  .layer-card.l3 { border-top: 3px solid var(--blue); }
+  .layer-card .lc-icon { font-size: 32px; margin-bottom: 12px; }
+  .layer-card h3 { font-size: 18px; color: var(--text-bright); margin-bottom: 8px; }
+  .layer-card p { color: var(--text-dim); font-size: 14px; margin-bottom: 12px; line-height: 1.5; }
+  .layer-card ul { list-style: none; font-size: 13px; color: var(--text-dim); }
+  .layer-card ul li { padding: 4px 0; padding-left: 16px; position: relative; }
+  .layer-card ul li::before { content: '›'; position: absolute; left:0; color: var(--text-dim); }
+
+  /* ===== STATE MACHINE ===== */
+  .sm-container {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 32px 20px; overflow-x: auto;
+  }
+  .sm-flow { display: flex; align-items: flex-start; gap: 0; min-width: 1300px; padding: 20px 0; }
+  .sm-node {
+    flex-shrink: 0; width: 100px; text-align: center; position: relative;
+  }
+  .sm-node-circle {
+    width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 14px; font-weight: 700;
+    border: 2px solid; position: relative; z-index: 2;
+    transition: all 0.3s;
+  }
+  .sm-node-circle.passed { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+  .sm-node-circle.active { background: rgba(212,165,116,0.15); border-color: var(--gold); color: var(--gold); box-shadow: 0 0 20px rgba(212,165,116,0.2); }
+  .sm-node-circle.pending { background: transparent; border-color: var(--border); color: var(--text-dim); }
+  .sm-node-label { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .sm-node-artifact { font-size: 10px; color: var(--text-dim); opacity: 0.7; margin-top: 2px; line-height: 1.3; }
+  .sm-arrow {
+    flex-shrink: 0; width: 60px; display: flex; align-items: center; justify-content: center;
+    position: relative; margin-top: 20px;
+  }
+  .sm-arrow-line { width: 48px; height: 2px; background: var(--green); position: relative; }
+  .sm-arrow-line::after { content: ''; position: absolute; right:-2px; top:-4px; border:5px solid transparent; border-left:8px solid var(--green); }
+  .sm-arrow-line.rollback { background: var(--red); }
+  .sm-arrow-line.rollback::after { border-left-color: var(--red); }
+  .sm-arrow-line.learn { background: var(--blue); }
+  .sm-arrow-line.learn::after { border-left-color: var(--blue); }
+
+  .sm-human-marker {
+    position: absolute; top: -14px; right: -6px; width: 18px; height: 18px;
+    background: var(--gold); border-radius: 50%; font-size: 10px; display: flex;
+    align-items: center; justify-content: center; z-index: 3;
+  }
+
+  /* Rollback section */
+  .rollback-section {
+    margin-top: 28px; padding: 20px; background: var(--red-dim); border: 1px solid rgba(231,76,60,0.2);
+    border-radius: var(--radius); display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;
+  }
+  .rollback-title { width: 100%; font-family: var(--mono); font-size: 13px; color: var(--red); margin-bottom: 4px; }
+  .rollback-item {
+    font-size: 12px; color: var(--text-dim); background: rgba(231,76,60,0.08);
+    padding: 6px 12px; border-radius: 4px; font-family: var(--mono);
+    border-left: 2px solid var(--red);
+  }
+
+  /* ===== DISPATCHER ===== */
+  .dispatch-flow {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 28px; font-family: var(--mono); font-size: 13px;
+  }
+  .dispatch-step {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px; text-align: center; min-width: 120px;
+  }
+  .dispatch-step .ds-num { font-size: 11px; color: var(--gold); margin-bottom: 4px; }
+  .dispatch-step .ds-title { color: var(--text-bright); font-weight: 600; font-size: 13px; }
+  .dispatch-step .ds-detail { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+  .dispatch-arrow { color: var(--gold); font-size: 20px; }
+  .dispatch-output {
+    width: 100%; margin-top: 20px; background: #0a0e14; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .dispatch-output pre {
+    color: var(--green); font-family: var(--mono); font-size: 12px;
+    white-space: pre-wrap; overflow-x: auto;
+  }
+
+  /* ===== GATES ===== */
+  .gate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .gate-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; position: relative;
+  }
+  .gate-card .g-id { font-family: var(--mono); font-size: 12px; color: var(--gold); }
+  .gate-card .g-name { font-size: 16px; color: var(--text-bright); font-weight: 600; margin: 4px 0; }
+  .gate-card .g-check { font-size: 12px; color: var(--text-dim); font-family: var(--mono); margin-top: 8px; line-height: 1.5; }
+  .gate-card .g-badge {
+    position: absolute; top: 16px; right: 16px;
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-family: var(--mono);
+  }
+  .g-badge.human { background: rgba(212,165,116,0.15); color: var(--gold); }
+
+  /* ===== SCRIPTS TABLE ===== */
+  .scripts-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .scripts-table th {
+    text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border);
+    color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    font-family: var(--mono);
+  }
+  .scripts-table td {
+    padding: 12px 16px; border-bottom: 1px solid rgba(30,42,58,0.5);
+    vertical-align: top;
+  }
+  .scripts-table tr:hover td { background: rgba(212,165,116,0.03); }
+  .scripts-table .s-name { font-family: var(--mono); color: var(--gold); font-weight: 600; }
+  .scripts-table .s-lines { font-family: var(--mono); color: var(--text-dim); font-size: 12px; }
+  .scripts-table .s-usage { font-family: var(--mono); font-size: 12px; color: var(--green); }
+
+  /* ===== EXPERIENCE PIPELINE ===== */
+  .exp-pipeline { display: flex; gap: 20px; align-items: stretch; flex-wrap: wrap; }
+  .exp-level {
+    flex:1; min-width: 260px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 24px; text-align: center;
+    position: relative;
+  }
+  .exp-level.l1 { border-top: 3px solid var(--blue); }
+  .exp-level.l2 { border-top: 3px solid var(--gold); }
+  .exp-level.l3 { border-top: 3px solid var(--green); }
+  .exp-level .el-icon { font-size: 36px; margin-bottom: 8px; }
+  .exp-level h4 { color: var(--text-bright); margin-bottom: 8px; }
+  .exp-level .el-from { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+  .exp-level .el-cond { font-size: 12px; color: var(--text-dim); line-height: 1.5; text-align: left; }
+  .exp-arrow-big { display:flex; align-items:center; font-size:28px; color:var(--gold); }
+
+  /* ===== FILE TREE ===== */
+  .file-tree { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; font-family: var(--mono); font-size: 13px; line-height: 1.8; }
+  .ft-dir { color: var(--blue); }
+  .ft-file { color: var(--text-dim); }
+  .ft-important { color: var(--gold); }
+  .ft-comment { color: #5a6a3a; }
+
+  /* ===== QUICK START ===== */
+  .qs-steps { display: flex; gap: 16px; flex-wrap: wrap; counter-reset: qs; }
+  .qs-step {
+    flex:1; min-width: 200px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px; position: relative;
+    counter-increment: qs;
+  }
+  .qs-step::before {
+    content: counter(qs); position: absolute; top: -14px; left: 20px;
+    width: 28px; height: 28px; border-radius: 50%; background: var(--gold);
+    color: var(--bg); font-family: var(--mono); font-weight: 700; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .qs-step h4 { color: var(--text-bright); margin: 8px 0 4px; font-size: 15px; }
+  .qs-step p { color: var(--text-dim); font-size: 13px; }
+  .qs-step code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 12px; color: var(--green); }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    text-align: center; padding: 40px 20px; color: var(--text-dim); font-size: 12px;
+    border-top: 1px solid var(--border); margin-top: 60px;
+    font-family: var(--mono);
+  }
+
+  /* ===== DETAILS ===== */
+  details { margin: 12px 0; }
+  details summary {
+    cursor: pointer; padding: 10px 14px; background: var(--surface2); border-radius: var(--radius);
+    color: var(--text-bright); font-weight: 600; font-size: 14px;
+    border: 1px solid var(--border); transition: border-color 0.2s;
+  }
+  details summary:hover { border-color: var(--gold-dim); }
+  details .detail-content { padding: 16px; border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); background: var(--surface); }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width:768px) {
+    .hero-stats { gap: 16px; }
+    .hero-stat .num { font-size: 24px; }
+    .sm-flow { min-width: auto; flex-direction: column; align-items: center; }
+    .sm-arrow { transform: rotate(90deg); margin: 4px 0; }
+    .dispatch-flow { flex-direction: column; }
+    .dispatch-arrow { transform: rotate(90deg); }
+  }
+
+  /* ===== ANIMATIONS ===== */
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  .pulse { animation: pulse 2s ease-in-out infinite; }
+  @keyframes fadeInUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+  .fade-in { animation: fadeInUp 0.6s ease-out forwards; }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-content fade-in">
+    <div class="hero-badge">WORKFLOW ARCHITECTURE v1.3.0</div>
+    <h1>Codex ↔ Claude<br><span>复利工作流系统</span></h1>
+    <p class="hero-sub">从软约束到硬执行的三层架构。让每次项目实践都沉淀为下次的杠杆。</p>
+    <div class="hero-stats">
+      <div class="hero-stat"><div class="num">9</div><div class="lbl">状态节点</div></div>
+      <div class="hero-stat"><div class="num">7</div><div class="lbl">硬门禁</div></div>
+      <div class="hero-stat"><div class="num">6</div><div class="lbl">确定性脚本</div></div>
+      <div class="hero-stat"><div class="num">3</div><div class="lbl">评估维度</div></div>
+      <div class="hero-stat"><div class="num">15k+</div><div class="lbl">行制品</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="#architecture">🏗 三层架构</a>
+    <a href="#state-machine">🔄 状态机</a>
+    <a href="#dispatcher">🎯 Dispatcher</a>
+    <a href="#gates">🚪 门禁</a>
+    <a href="#scripts">⚡ 脚本</a>
+    <a href="#experience">🧬 经验管道</a>
+    <a href="#files">📁 文件结构</a>
+    <a href="#quickstart">🚀 快速上手</a>
+  </div>
+</nav>
+
+<!-- ===== 1. THREE LAYER ARCHITECTURE ===== -->
+<section class="section" id="architecture">
+  <div class="section-header">
+    <div class="section-num">01 / ARCHITECTURE</div>
+    <h2 class="section-title">三层架构总览</h2>
+    <p class="section-desc">每一层都建立在下一层之上。L2 的确定性脚本强制执行 L1 定义的流程，L3 度量一切并驱动持续改进。</p>
+  </div>
+
+  <div class="layer-grid">
+    <div class="layer-card l1">
+      <div class="lc-icon">🔄</div>
+      <h3>L1 · 主循环层</h3>
+      <p>功能开发主干 + 反馈回退 + 跨功能学习弧。失败不是死胡同——是有方向的信号。</p>
+      <ul>
+        <li>S0 → S9 完整状态机</li>
+        <li>门禁失败 → 反馈注入 → 回退重试</li>
+        <li>48h/72h 停滞检测 + 人类升级</li>
+        <li>单Agent↔双Agent 模式切换</li>
+        <li>Retro → OpenSpec 跨功能学习弧</li>
+        <li>feedback-loop.md (844行) + resume-protocol.md (793行)</li>
+      </ul>
+    </div>
+
+    <div class="layer-card l2">
+      <div class="lc-icon">🔒</div>
+      <h3>L2 · 确定性门禁层</h3>
+      <p>门禁不是"建议"——是硬阻断。dispatcher 将主会话退化为纯执行器，不再依赖 Agent 的自觉。</p>
+      <ul>
+        <li>dispatch.sh — 硬编码路由决策树，零LLM</li>
+        <li>gate-check.sh — 7门禁产物检查 + --enforce 硬阻断</li>
+        <li>validate-state.sh — JSON Schema 校验 + --fix 自修复</li>
+        <li>ci-gate-guard.sh — CI/CD 门禁守护</li>
+        <li>.claude/settings.json — PreToolUse/PostToolUse Hook 实时拦截</li>
+        <li>feature-state.schema.json — 结构化状态唯一真相源</li>
+      </ul>
+    </div>
+
+    <div class="layer-card l3">
+      <div class="lc-icon">📊</div>
+      <h3>L3 · 评估与进化层</h3>
+      <p>度量一切，沉淀一切。评分引擎告诉人类工作流在变好还是变差，经验管道确保每个坑只踩一次。</p>
+      <ul>
+        <li>score.py — 7维评分引擎（纯算术，零LLM）</li>
+        <li>dashboard.html — 可视化仪表盘</li>
+        <li>extract-lessons.sh — Lesson 自动提取</li>
+        <li>pipeline.md — Lesson→Pattern→Instinct 三级进化</li>
+        <li>EPR (经验沉淀率) 指标追踪</li>
+        <li>baseline 管理 + 确定性 Hash 校验</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 2. STATE MACHINE ===== -->
+<section class="section" id="state-machine">
+  <div class="section-header">
+    <div class="section-num">02 / STATE MACHINE</div>
+    <h2 class="section-title">状态机全貌：S0 → S9 主干 + 反馈弧</h2>
+    <p class="section-desc">每个功能走同一条主干。绿色=正向流转，红色虚线=失败回退，蓝色=跨功能学习反馈弧，金色标记=人类Checkpoint触发点。</p>
+  </div>
+
+  <div class="sm-container">
+    <!-- Main flow -->
+    <div class="sm-flow">
+      <!-- S0 -->
+      <div class="sm-node">
+        <div class="sm-node-circle passed">S0</div>
+        <div class="sm-node-label">启动</div>
+        <div class="sm-node-artifact">feature-state.json</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S1 -->
+      <div class="sm-node">
+        <div class="sm-node-circle passed" style="position:relative">
+          S1
+          <div class="sm-human-marker" title="Gate 1: 全新功能需人类审批设计决策">👤</div>
+        </div>
+        <div class="sm-node-label">OpenSpec</div>
+        <div class="sm-node-artifact">01-openspec-proposal.md</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S2 -->
+      <div class="sm-node">
+        <div class="sm-node-circle active">S2</div>
+        <div class="sm-node-label">grill-me</div>
+        <div class="sm-node-artifact">02-grill-me-report.md</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S3 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending">S3</div>
+        <div class="sm-node-label">修正规格</div>
+        <div class="sm-node-artifact">修订后的提案</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S4 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending" style="position:relative">
+          S4
+          <div class="sm-human-marker" title="S4: 领域知识缺口 / 生产数据/凭证">👤</div>
+        </div>
+        <div class="sm-node-label">任务映射</div>
+        <div class="sm-node-artifact">03-task-skill-map.md</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S5 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending" style="position:relative">
+          S5
+          <div class="sm-human-marker" title="S5: 工作量>2x估算">👤</div>
+        </div>
+        <div class="sm-node-label">实现</div>
+        <div class="sm-node-artifact">代码变更 + 04-plan</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S6 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending" style="position:relative">
+          S6
+          <div class="sm-human-marker" title="S6: 两份审查同时标记同一P0">👤</div>
+        </div>
+        <div class="sm-node-label">双审</div>
+        <div class="sm-node-artifact">reviews/*-review.md</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S7 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending" style="position:relative">
+          S7
+          <div class="sm-human-marker" title="S7: 验收标准验证失败">👤</div>
+        </div>
+        <div class="sm-node-label">验证</div>
+        <div class="sm-node-artifact">05-verification-log.md</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S8 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending">S8</div>
+        <div class="sm-node-label">知识沉淀</div>
+        <div class="sm-node-artifact">06-adr + 07-retro</div>
+      </div>
+      <div class="sm-arrow"><div class="sm-arrow-line"></div></div>
+
+      <!-- S9 -->
+      <div class="sm-node">
+        <div class="sm-node-circle pending">S9</div>
+        <div class="sm-node-label">归档</div>
+        <div class="sm-node-artifact">PR / 发布说明</div>
+      </div>
+    </div>
+
+    <!-- Rollback arcs -->
+    <div class="rollback-section">
+      <div class="rollback-title">↩ 失败回退弧（红色虚线 = 门禁失败后的回退路径）</div>
+      <div class="rollback-item">S2→S1: grill-me发现根本性规格缺陷</div>
+      <div class="rollback-item">S3→S1: grill-me暴露目标级矛盾</div>
+      <div class="rollback-item">S5→S3: 实现暴露规格模糊</div>
+      <div class="rollback-item">S6→S3: 审查死锁 + 规格模糊</div>
+      <div class="rollback-item">S7→S5: 验收失败（实现bug）</div>
+      <div class="rollback-item">S7→S3: 验收失败（标准错误）</div>
+      <div class="rollback-item" style="border-left-color:var(--blue)">S8→S0: 学习反馈弧（跨功能）</div>
+    </div>
+
+    <!-- Learning arc -->
+    <div style="margin-top:20px; padding:16px; background:var(--blue-dim); border:1px solid rgba(52,152,219,0.2); border-radius:var(--radius); display:flex; align-items:center; gap:12px;">
+      <span style="font-size:20px;">🔵</span>
+      <div>
+        <strong style="color:var(--blue);">跨功能学习反馈弧</strong>
+        <span style="color:var(--text-dim); font-size:13px; margin-left:8px;">
+          S8 Retro → experience/ 管道 → 下一个功能的 S0 OpenSpec。
+          四个通道：ADR / Task Retro / 经验管道 / 反馈循环统计。
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <details style="margin-top:16px;">
+    <summary>📋 7个人类Checkpoint触发点详解</summary>
+    <div class="detail-content">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <tr style="border-bottom:1px solid var(--border);">
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">状态</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">触发条件</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">人类需决定</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">输出格式</th>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S0</td><td style="padding:8px 12px;">功能描述模糊，存在多种合理解读</td><td style="padding:8px 12px;">定义要构建什么</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S1 (Gate 1)</td><td style="padding:8px 12px;">全新功能（非增量修改）</td><td style="padding:8px 12px;">规模/风格/技术栈/范围/角色</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S4</td><td style="padding:8px 12px;">领域知识缺口</td><td style="padding:8px 12px;">提供知识或改写任务</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S4</td><td style="padding:8px 12px;">涉及生产数据/计费/凭证</td><td style="padding:8px 12px;">权限批准</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S5</td><td style="padding:8px 12px;">任务耗时 > 2x 估算</td><td style="padding:8px 12px;">终止/缩减范围/接受成本</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">S7</td><td style="padding:8px 12px;">验收标准验证失败</td><td style="padding:8px 12px;">豁免还是回退修复</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+        <tr><td style="padding:8px 12px; font-family:var(--mono); color:var(--gold);">任意</td><td style="padding:8px 12px;">feedbackLoop.retryCount ≥ maxRetries (3)</td><td style="padding:8px 12px;">修正规格/豁免/缩减/接管</td><td style="padding:8px 12px;">六段Checkpoint</td></tr>
+      </table>
+    </div>
+  </details>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 3. DISPATCHER ===== -->
+<section class="section" id="dispatcher">
+  <div class="section-header">
+    <div class="section-num">03 / DISPATCHER</div>
+    <h2 class="section-title">调度器：主会话退化为纯执行器</h2>
+    <p class="section-desc">这是整个工作流从"软约束"变"硬约束"的关键。Agent 不再读 dispatcher.md 自行判断——执行 dispatch.sh，照 JSON 输出办事。</p>
+  </div>
+
+  <h4 style="margin-bottom:16px; color:var(--text-dim); font-size:14px;">dispatch.sh 决策流程</h4>
+  <div class="dispatch-flow">
+    <div class="dispatch-step"><div class="ds-num">STEP 1</div><div class="ds-title">读取状态</div><div class="ds-detail">feature-state.json</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">STEP 2</div><div class="ds-title">校验Schema</div><div class="ds-detail">gate-check --schema-only</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">STEP 3</div><div class="ds-title">识别角色</div><div class="ds-detail">编排者 vs 挑战者</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">STEP 4</div><div class="ds-title">可达性检测</div><div class="ds-detail">P0-P4 回归信号</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">STEP 5</div><div class="ds-title">门禁检查</div><div class="ds-detail">gate-check.sh</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">STEP 6</div><div class="ds-title">路由决策</div><div class="ds-detail">硬编码if/else树</div></div>
+    <div class="dispatch-arrow">→</div>
+    <div class="dispatch-step"><div class="ds-num">OUTPUT</div><div class="ds-title">JSON指令</div><div class="ds-detail">nextAction + blockers</div></div>
+  </div>
+
+  <div class="dispatch-output">
+    <pre>$ <span style="color:var(--gold);">bash workflow/scripts/dispatch.sh ai-werewolf --json</span>
+{
+  <span style="color:var(--text-dim);">"featureId"</span>: <span style="color:#e7c06c;">"ai-werewolf"</span>,
+  <span style="color:var(--text-dim);">"currentState"</span>: <span style="color:#e7c06c;">"S5"</span>,
+  <span style="color:var(--text-dim);">"mode"</span>: <span style="color:#e7c06c;">"single-agent"</span>,
+  <span style="color:var(--text-dim);">"orchestrator"</span>: <span style="color:#e7c06c;">"claude"</span>,
+  <span style="color:var(--text-dim);">"gateCheck"</span>: { <span style="color:var(--text-dim);">"passed"</span>: <span style="color:var(--green);">true</span> },
+  <span style="color:var(--text-dim);">"nextAction"</span>: {
+    <span style="color:var(--text-dim);">"role"</span>: <span style="color:#e7c06c;">"orchestrator"</span>,
+    <span style="color:var(--text-dim);">"action"</span>: <span style="color:#e7c06c;">"implement"</span>,
+    <span style="color:var(--text-dim);">"description"</span>: <span style="color:#e7c06c;">"继续 S5 实现。按 task-skill-map 完成下一个未完成的任务"</span>,
+    <span style="color:var(--text-dim);">"requiredReads"</span>: [<span style="color:#e7c06c;">"01-openspec-proposal.md"</span>, <span style="color:#e7c06c;">"03-task-skill-map.md"</span>],
+    <span style="color:var(--text-dim);">"blockers"</span>: [],
+    <span style="color:var(--text-dim);">"warnings"</span>: [<span style="color:#e7c06c;">"mode single-agent: 所有审查需自审"</span>],
+    <span style="color:var(--text-dim);">"humanCheckpoint"</span>: <span style="color:var(--blue);">null</span>
+  },
+  <span style="color:var(--text-dim);">"regressionDetected"</span>: <span style="color:var(--blue);">false</span>
+}</pre>
+  </div>
+
+  <details style="margin-top:12px;">
+    <summary>🔍 路由决策树（硬编码在 dispatch.sh 中）</summary>
+    <div class="detail-content">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <tr style="border-bottom:1px solid var(--border);">
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">状态</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">编排者动作</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">挑战者动作</th>
+          <th style="text-align:left; padding:8px 12px; color:var(--text-dim);">单Agent模式</th>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S0</td><td style="padding:8px 12px;">create-openspec</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">create-openspec</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S1</td><td style="padding:8px 12px;">complete-openspec</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">complete-openspec</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S2</td><td style="padding:8px 12px;">grill-me</td><td style="padding:8px 12px;">grill-me-review</td><td style="padding:8px 12px;">manual-grill</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S3</td><td style="padding:8px 12px;">amend-spec</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">amend-spec</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S4</td><td style="padding:8px 12px;">task-mapping</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">task-mapping</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S5</td><td style="padding:8px 12px;">implement</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">implement</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S6</td><td style="padding:8px 12px;">review</td><td style="padding:8px 12px;">code-review</td><td style="padding:8px 12px;">self-review</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S7</td><td style="padding:8px 12px;">verify</td><td style="padding:8px 12px;">verify-review</td><td style="padding:8px 12px;">verify</td></tr>
+        <tr style="border-bottom:1px solid rgba(30,42,58,0.5);"><td style="padding:8px 12px; font-family:var(--mono);">S8</td><td style="padding:8px 12px;">knowledge-capture</td><td style="padding:8px 12px;">architecture-review</td><td style="padding:8px 12px;">knowledge-capture</td></tr>
+        <tr><td style="padding:8px 12px; font-family:var(--mono);">S9</td><td style="padding:8px 12px;">archive</td><td style="padding:8px 12px;">wait</td><td style="padding:8px 12px;">archive</td></tr>
+      </table>
+    </div>
+  </details>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 4. GATES ===== -->
+<section class="section" id="gates">
+  <div class="section-header">
+    <div class="section-num">04 / GATES</div>
+    <h2 class="section-title">七门禁系统</h2>
+    <p class="section-desc">每个门禁由 gate-check.sh 确定性检查。金色角标 = 人类可能介入的触发点。</p>
+  </div>
+
+  <div class="gate-grid">
+    <div class="gate-card">
+      <span class="g-badge human">👤 人类</span>
+      <div class="g-id">GATE 1</div>
+      <div class="g-name">📋 规格就绪</div>
+      <div class="g-check">产物: 01-openspec-proposal.md ≥ 500B<br>必需: Goals / Non-Goals / Acceptance / Problem<br>触发: 全新功能 → 人类签核设计决策</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-id">GATE 2</div>
+      <div class="g-name">🔍 风险就绪</div>
+      <div class="g-check">产物: 02-grill-me-report.md ≥ 300B<br>必需: P0 / P1 / Risk / Severity<br>P0/P1 必须 resolved 或 accepted</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-id">GATE 3</div>
+      <div class="g-name">🗂 任务就绪</div>
+      <div class="g-check">产物: 03-task-skill-map.md ≥ 300B<br>必需: owner / skill / files / rollback<br>识别可并行分支</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-id">GATE 4</div>
+      <div class="g-name">⚡ 实现就绪</div>
+      <div class="g-check">产物: 04-implementation-plan.md ≥ 100B<br>代码变更可追溯到已批准任务<br>无范围漂移</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-badge human">👤 死锁</div>
+      <div class="g-id">GATE 5</div>
+      <div class="g-name">✅ 审查就绪</div>
+      <div class="g-check">产物: reviews/*.md (≥1份)<br>双Agent各一份，single-agent标出<br>两份同标P0→人类签核</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-badge human">👤 豁免</div>
+      <div class="g-id">GATE 6</div>
+      <div class="g-name">🧪 已验证</div>
+      <div class="g-check">产物: 05-verification-log.md ≥ 100B<br>验收标准已记录<br>残余风险明确</div>
+    </div>
+    <div class="gate-card">
+      <div class="g-id">GATE 7</div>
+      <div class="g-name">🧠 知识已捕获</div>
+      <div class="g-check">产物: 06-adr.md + 07-task-retro.md ≥ 50B<br>决策不困在聊天中<br>经验写入 experience/</div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 5. SCRIPTS ===== -->
+<section class="section" id="scripts">
+  <div class="section-header">
+    <div class="section-num">05 / SCRIPTS</div>
+    <h2 class="section-title">确定性脚本一览</h2>
+    <p class="section-desc">全部零 LLM 调用，纯 Bash/Python，可放进 CI。共 6891 行。<br>核心原则：宁要可复现的粗糙分，不要会漂移的精准分。</p>
+  </div>
+
+  <div style="overflow-x:auto;">
+  <table class="scripts-table">
+    <thead>
+      <tr><th>脚本</th><th>行数</th><th>用途</th><th>用法示例</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="s-name">dispatch.sh</td>
+        <td class="s-lines">1,216</td>
+        <td>主会话退化执行器 — 读取状态，硬编码路由，输出JSON指令</td>
+        <td class="s-usage">bash workflow/scripts/dispatch.sh &lt;id&gt; --json</td>
+      </tr>
+      <tr>
+        <td class="s-name">gate-check.sh</td>
+        <td class="s-lines">1,288</td>
+        <td>7门禁产物检查 + --enforce 硬阻断 + --schema-only</td>
+        <td class="s-usage">bash workflow/scripts/gate-check.sh &lt;id&gt; --enforce</td>
+      </tr>
+      <tr>
+        <td class="s-name">ci-gate-guard.sh</td>
+        <td class="s-lines">887</td>
+        <td>CI/CD 门禁守护 — git diff → 受影响功能 → gate-check + score</td>
+        <td class="s-usage">bash workflow/scripts/ci-gate-guard.sh --strict</td>
+      </tr>
+      <tr>
+        <td class="s-name">validate-state.sh</td>
+        <td class="s-lines">1,156</td>
+        <td>Schema 独立校验 — 10项确定性检查 + --fix 自修复</td>
+        <td class="s-usage">bash workflow/scripts/validate-state.sh &lt;id&gt; --fix</td>
+      </tr>
+      <tr>
+        <td class="s-name">score.py</td>
+        <td class="s-lines">1,337</td>
+        <td>7维评分引擎 — 纯算术+文件系统，确定SHA256 Hash</td>
+        <td class="s-usage">python workflow/eval/score.py --feature &lt;id&gt;</td>
+      </tr>
+      <tr>
+        <td class="s-name">extract-lessons.sh</td>
+        <td class="s-lines">1,007</td>
+        <td>Lesson 自动提取 — 从retro提取 + 标签匹配 + Pattern候选检测</td>
+        <td class="s-usage">bash workflow/experience/extract-lessons.sh --all</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 6. EXPERIENCE PIPELINE ===== -->
+<section class="section" id="experience">
+  <div class="section-header">
+    <div class="section-num">06 / EXPERIENCE PIPELINE</div>
+    <h2 class="section-title">经验三级进化管道</h2>
+    <p class="section-desc">Lesson（教训）→ Pattern（模式）→ Instinct（本能规则）。每级晋升需人工确认——防止错误经验扩散。这是项目产生"复利"的核心机制。</p>
+  </div>
+
+  <div class="exp-pipeline">
+    <div class="exp-level l1">
+      <div class="el-icon">📝</div>
+      <h4>Level 1 · Lesson</h4>
+      <div class="el-from">来源：07-task-retro.md 自动提取</div>
+      <div class="el-cond">
+        <strong>触发：</strong>每次 retro 完成<br>
+        <strong>存储：</strong>lessons/&lt;feature-id&gt;/lesson-NNN.md<br>
+        <strong>状态：</strong>draft → reviewed → promoted<br>
+        <strong>确认：</strong>无需确认（自动提取）<br>
+        <strong>范围：</strong>单功能/单任务
+      </div>
+    </div>
+    <div class="exp-arrow-big">→</div>
+    <div class="exp-level l2">
+      <div class="el-icon">🧩</div>
+      <h4>Level 2 · Pattern</h4>
+      <div class="el-from">由 ≥2 个不同功能的 Lesson 归纳</div>
+      <div class="el-cond">
+        <strong>晋升条件：</strong>≥2个不同功能 + ≥1个P0/P1<br>
+        <strong>存储：</strong>patterns/&lt;pattern-name&gt;.md<br>
+        <strong>确认：</strong>人工（六段Checkpoint格式）<br>
+        <strong>内容：</strong>症状/根因/触发条件/解决方案/Instinct候选
+      </div>
+    </div>
+    <div class="exp-arrow-big">→</div>
+    <div class="exp-level l3">
+      <div class="el-icon">🧬</div>
+      <h4>Level 3 · Instinct</h4>
+      <div class="el-from">Pattern 激活 ≥30天 + recurrenceCount ≥3</div>
+      <div class="el-cond">
+        <strong>晋升条件：</strong>≥30天 + ≥3次复发 + 可机械执行<br>
+        <strong>注入：</strong>AGENTS.md / CLAUDE.md / state-machine.md<br>
+        <strong>确认：</strong>人工签核（人类执行写入）<br>
+        <strong>逆转：</strong>每条Instinct必须定义逆转条件
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px; padding:16px; background:var(--green-dim); border:1px solid rgba(39,174,96,0.2); border-radius:var(--radius); font-size:13px;">
+    <strong style="color:var(--green);">📈 EPR (经验沉淀率)</strong>
+    <span style="color:var(--text-dim); margin-left:8px;">
+      = (活跃Pattern数 + 活跃Instinct数) / (总Lesson数 + 1) × 100。
+      ≥30% 优秀 · 15-29% 健康 · 5-14% 警告 · &lt;5% 危险。
+      <a href="https://github.com/oldmanpushbike/complex-workflow/blob/main/workflow/experience/pipeline.md" style="color:var(--gold);">详细定义 →</a>
+    </span>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 7. FILE STRUCTURE ===== -->
+<section class="section" id="files">
+  <div class="section-header">
+    <div class="section-num">07 / FILES</div>
+    <h2 class="section-title">项目文件结构</h2>
+    <p class="section-desc">金色=核心制品，蓝色=目录，灰色=模板/辅助</p>
+  </div>
+
+  <div class="file-tree">
+<span class="ft-dir">codex-claude-complex-workflow/</span>
+<span class="ft-comment"># ── 根目录：启动指南 + 共享契约 ──</span>
+<span class="ft-important">├── README.md</span>                        <span class="ft-comment">← 你正在看的文件</span>
+<span class="ft-important">├── AGENTS.md</span>                         <span class="ft-comment">← 共享契约 + 7硬门禁 + 学习型Checkpoint</span>
+<span class="ft-important">├── CLAUDE.md</span>                         <span class="ft-comment">← Claude 启动指南</span>
+<span class="ft-important">├── CODEX.md</span>                          <span class="ft-comment">← Codex 启动指南</span>
+<span class="ft-file">├── CHANGELOG.md</span>
+<span class="ft-file">├── FEEDBACK-ANALYSIS.md</span>
+<span class="ft-file">├── .claude/settings.json</span>             <span class="ft-comment">← Hook 配置</span>
+│
+<span class="ft-dir">├── workflow/</span>
+<span class="ft-comment">│   # ── 核心定义层 ──</span>
+<span class="ft-important">│   ├── state-machine.md</span>              <span class="ft-comment">← S0-S9 状态机（含反馈回退弧）</span>
+<span class="ft-important">│   ├── fallback-matrix.md</span>            <span class="ft-comment">← 12种降级场景</span>
+<span class="ft-important">│   ├── learning-checkpoints.md</span>       <span class="ft-comment">← 学习型门禁框架（六段HTML格式）</span>
+<span class="ft-important">│   ├── dispatcher.md</span>                 <span class="ft-comment">← 调度器Agent指令 (771行)</span>
+<span class="ft-important">│   ├── feedback-loop.md</span>             <span class="ft-comment">← 反馈循环协议 (844行)</span>
+<span class="ft-important">│   ├── resume-protocol.md</span>            <span class="ft-comment">← 续跑/恢复协议 (793行)</span>
+<span class="ft-important">│   ├── feature-state.schema.json</span>     <span class="ft-comment">← 功能状态 JSON Schema</span>
+│   │
+<span class="ft-comment">│   # ── 确定性脚本层（零LLM，可CI）──</span>
+<span class="ft-dir">│   ├── scripts/</span>
+<span class="ft-important">│   │   ├── dispatch.sh</span>               <span class="ft-comment">← 主会话退化执行器 (1216行)</span>
+<span class="ft-important">│   │   ├── gate-check.sh</span>             <span class="ft-comment">← 门禁检查 + enforce模式 (1288行)</span>
+<span class="ft-important">│   │   ├── ci-gate-guard.sh</span>          <span class="ft-comment">← CI/CD 门禁守护 (887行)</span>
+<span class="ft-important">│   │   └── validate-state.sh</span>         <span class="ft-comment">← Schema 校验 + 自修复 (1156行)</span>
+│   │
+<span class="ft-comment">│   # ── 评估层 ──</span>
+<span class="ft-dir">│   ├── eval/</span>
+<span class="ft-important">│   │   ├── scoring-engine.md</span>         <span class="ft-comment">← 7维评分算法定义 (1031行)</span>
+<span class="ft-important">│   │   ├── score.py</span>                  <span class="ft-comment">← 评分引擎实现 (1337行)</span>
+<span class="ft-important">│   │   ├── dashboard.html</span>            <span class="ft-comment">← 可视化仪表盘</span>
+<span class="ft-important">│   │   └── workflow-architecture.html</span> <span class="ft-comment">← 架构全景图（本文件）</span>
+│   │
+<span class="ft-comment">│   # ── 经验进化层 ──</span>
+<span class="ft-dir">│   ├── experience/</span>
+<span class="ft-important">│   │   ├── pipeline.md</span>               <span class="ft-comment">← 三级进化管道定义 (1154行)</span>
+<span class="ft-important">│   │   ├── extract-lessons.sh</span>        <span class="ft-comment">← Lesson 自动提取 (1007行)</span>
+<span class="ft-dir">│   │   ├── lessons/</span>                   <span class="ft-comment">← Level 1: 教训</span>
+<span class="ft-dir">│   │   ├── patterns/</span>                  <span class="ft-comment">← Level 2: 模式</span>
+<span class="ft-dir">│   │   └── instincts/</span>                 <span class="ft-comment">← Level 3: 本能规则</span>
+│   │
+<span class="ft-comment">│   # ── 制品模板 + 实例 ──</span>
+<span class="ft-dir">│   ├── templates/</span>                    <span class="ft-comment">← 7个制品模板（中文化 + HTML增强）</span>
+<span class="ft-dir">│   ├── features/</span>                     <span class="ft-comment">← 功能实例（每个含 feature-state.json）</span>
+<span class="ft-dir">│   ├── reviews/</span>                      <span class="ft-comment">← 审查报告模板</span>
+<span class="ft-dir">│   ├── handoffs/</span>                     <span class="ft-comment">← Agent 交接文件</span>
+<span class="ft-dir">│   └── skills/</span>                       <span class="ft-comment">← 技能路由 + 子任务卡片</span>
+│
+<span class="ft-dir">└── examples/</span>
+    <span class="ft-dir">└── ai-werewolf/</span>                  <span class="ft-comment">← 完整工作流示例（狼人杀Web游戏）</span>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 8. QUICK START ===== -->
+<section class="section" id="quickstart">
+  <div class="section-header">
+    <div class="section-num">08 / QUICKSTART</div>
+    <h2 class="section-title">快速上手：五步启动一个功能</h2>
+    <p class="section-desc">从零到完成的日常实践流程。</p>
+  </div>
+
+  <div class="qs-steps">
+    <div class="qs-step">
+      <h4>读取上下文</h4>
+      <p>读 <code>AGENTS.md</code> 了解共享契约。确定自己是编排者还是挑战者。</p>
+    </div>
+    <div class="qs-step">
+      <h4>运行 Dispatcher</h4>
+      <p><code>bash workflow/scripts/dispatch.sh &lt;feature-id&gt; --json</code><br>获取机器可读的路由指令。</p>
+    </div>
+    <div class="qs-step">
+      <h4>照指令执行</h4>
+      <p>严格按 <code>nextAction</code> 中的 action 和 requiredReads 执行当前状态的任务。</p>
+    </div>
+    <div class="qs-step">
+      <h4>门禁检查</h4>
+      <p>状态转换前运行 <code>gate-check.sh</code>。若失败 → feedback-loop：注入修正 → 回退 → 重试。</p>
+    </div>
+    <div class="qs-step">
+      <h4>沉淀经验</h4>
+      <p>S8 完成 retro → 运行 <code>extract-lessons.sh</code>。Pattern 候选满足条件时人工确认晋升。</p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===== 9. SCORING ===== -->
+<section class="section" id="scoring">
+  <div class="section-header">
+    <div class="section-num">09 / SCORING</div>
+    <h2 class="section-title">七维评分引擎</h2>
+    <p class="section-desc">score.py 实现。每个维度 0-100 分，纯算术，零 LLM。SHA256 hash 确保不可篡改。</p>
+  </div>
+
+  <div style="overflow-x:auto;">
+  <table class="scripts-table">
+    <thead>
+      <tr><th>维度</th><th>权重</th><th>度量内容</th><th>公式方法</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="s-name">D1 流程完整性</td><td>22%</td><td>所有门禁产物是否存在且状态为passed</td><td>gate artifacts 文件存在性 + 大小阈值</td></tr>
+      <tr><td class="s-name">D2 审查质量</td><td>22%</td><td>grill-me + review 发现数、P0/P1覆盖率</td><td>density(50) + severity(50) + coverage(10)，single-agent×0.75</td></tr>
+      <tr><td class="s-name">D3 降级频率</td><td>15%</td><td>single-agent 模式占比、降级事件严重度</td><td>15种事件类型 severity_weight ×6，floor 10</td></tr>
+      <tr><td class="s-name">D4 人工响应延迟</td><td>10%</td><td>人类审批的平均响应时间</td><td>阶梯函数：≤1h=100, ≤4h=85, ≤12h=70, ≤24h=55, ≤72h=35, >72h=15</td></tr>
+      <tr><td class="s-name">D5 经验沉淀率</td><td>12%</td><td>retro → pattern 转化、ADR 决策可追溯</td><td>ADR结构检测 + Retro结构检测 + Pattern文件引用扫描</td></tr>
+      <tr><td class="s-name">D6 重试成功率</td><td>10%</td><td>反馈循环修正成功率</td><td>retryHistory passRate×80 + 反馈注入bonus − 超限/停滞penalty</td></tr>
+      <tr><td class="s-name">D7 文档健康度</td><td>9%</td><td>ADR/retro 文件存在性和体量</td><td>文件大小阶梯：≥500B=50, ≥300B=40, ≥100B=25, <100B=10</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div style="margin-top:16px; display:flex; gap:12px; flex-wrap:wrap;">
+    <span style="padding:6px 14px; border-radius:20px; font-size:12px; font-family:var(--mono); background:var(--green-dim); color:var(--green); border:1px solid rgba(39,174,96,0.3);">85-100 A 优秀</span>
+    <span style="padding:6px 14px; border-radius:20px; font-size:12px; font-family:var(--mono); background:rgba(52,152,219,0.15); color:var(--blue); border:1px solid rgba(52,152,219,0.3);">70-84 B 良好</span>
+    <span style="padding:6px 14px; border-radius:20px; font-size:12px; font-family:var(--mono); background:rgba(212,165,116,0.1); color:var(--gold); border:1px solid rgba(212,165,116,0.3);">55-69 C 及格</span>
+    <span style="padding:6px 14px; border-radius:20px; font-size:12px; font-family:var(--mono); background:rgba(230,126,34,0.12); color:#e67e22; border:1px solid rgba(230,126,34,0.3);">40-54 D 需改进</span>
+    <span style="padding:6px 14px; border-radius:20px; font-size:12px; font-family:var(--mono); background:var(--red-dim); color:var(--red); border:1px solid rgba(231,76,60,0.3);">0-39 F 不及格</span>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <p>Codex ↔ Claude 复利工作流系统 v1.3.0 · Architecture Overview</p>
+  <p style="margin-top:4px;">
+    <a href="https://github.com/oldmanpushbike/complex-workflow" style="color:var(--gold); text-decoration:none;">github.com/oldmanpushbike/complex-workflow</a>
+    &nbsp;·&nbsp; 15,000+ 行制品 &nbsp;·&nbsp; 6 个确定性脚本 &nbsp;·&nbsp; 零 LLM 依赖
+  </p>
+  <p style="margin-top:8px; opacity:0.5;">Built with Claude Code · 2026-06-16</p>
+</footer>
+
+</body>
+</html>
