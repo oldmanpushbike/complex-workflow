@@ -1,0 +1,17 @@
+# Optional Codex project config example.
+# Copy selected parts into `.codex/config.toml` in a trusted project if needed.
+
+# Claude Code as a local MCP server for Codex.
+# On Windows, prefer claude.cmd over claude.ps1 for direct process spawning.
+[mcp_servers.claude-code]
+command = 'C:\Users\lenovo\AppData\Roaming\npm\claude.cmd'
+args = ['mcp', 'serve']
+startup_timeout_sec = 120
+tool_timeout_sec = 600
+enabled = true
+required = false
+default_tools_approval_mode = "prompt"
+
+# Optional: keep only safer/read-oriented Claude MCP tools enabled at first.
+# enabled_tools = ["Read", "Grep", "Glob", "TaskList", "TaskGet"]
+

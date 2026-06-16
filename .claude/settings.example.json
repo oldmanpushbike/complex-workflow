@@ -1,0 +1,13 @@
+{
+  "notes": [
+    "Optional Claude Code settings example.",
+    "Keep project-specific secrets out of this file.",
+    "Use Claude Code's /mcp panel or claude mcp list to inspect MCP status."
+  ],
+  "workflow": {
+    "primaryInstructions": ["CLAUDE.md", "AGENTS.md"],
+    "featureArtifacts": "workflow/features/<feature-id>/",
+    "fallbackMatrix": "workflow/fallback-matrix.md"
+  }
+}
+
