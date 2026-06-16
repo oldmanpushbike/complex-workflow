@@ -1,0 +1,881 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codex-claude-workflow/feature-state.schema.json",
+  "title": "Feature State File Schema",
+  "description": "确定性门禁层（Layer 2）的唯一事实来源。每个功能文件夹下必须有且仅有一份 feature-state.json，由 gate-check.sh 进行确定性校验，零 LLM 调用。使用 ajv 兼容的 JSON Schema draft-07。",
+
+  "type": "object",
+  "required": [
+    "featureId",
+    "currentState",
+    "orchestrator",
+    "mode",
+    "createdAt",
+    "updatedAt",
+    "gates",
+    "stateHistory"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "引用本 schema 文件路径，便于 IDE 自动补全和校验。"
+    },
+
+    "featureId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "description": "功能唯一标识符。kebab-case，至少 3 字符。例如 'ai-werewolf'、'gate-layer-v2'。"
+    },
+
+    "humanReadableName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120,
+      "description": "人类可读的功能名称。例如 'AI 狼人杀 Web 游戏'。"
+    },
+
+    "currentState": {
+      "type": "string",
+      "enum": ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"],
+      "description": "当前工作流状态，对应 state-machine.md 中的 S0-S9 主干。"
+    },
+
+    "orchestrator": {
+      "type": "string",
+      "enum": ["codex", "claude"],
+      "description": "谁在编排这个功能。在 S0 设定，功能生命周期内不可变更。"
+    },
+
+    "challenger": {
+      "type": "string",
+      "enum": ["codex", "claude", "manual", "none"],
+      "description": "谁在执行 grill-me / 审查。当另一 Agent 不可达时为 manual 或 none。"
+    },
+
+    "mode": {
+      "type": "string",
+      "enum": ["dual-agent", "single-agent"],
+      "description": "dual-agent = 两个 Agent 均可通信；single-agent = 另一方不可达，执行降级协议。"
+    },
+
+    "codexStatus": {
+      "type": "string",
+      "enum": ["reachable", "unreachable", "degraded", "unknown"],
+      "default": "unknown",
+      "description": "Codex 的当前可达状态。"
+    },
+
+    "claudeStatus": {
+      "type": "string",
+      "enum": ["reachable", "unreachable", "degraded", "unknown"],
+      "default": "unknown",
+      "description": "Claude Code 的当前可达状态。"
+    },
+
+    "mcpStatus": {
+      "type": "string",
+      "enum": ["up", "down", "unknown"],
+      "default": "unknown",
+      "description": "MCP 通道的当前状态。"
+    },
+
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "功能状态文件首次创建时间，ISO 8601。"
+    },
+
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "功能状态文件最后修改时间，ISO 8601。每次状态变更必须更新。"
+    },
+
+    "completedAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "功能归档时间，ISO 8601。仅在 S9 时填写，此前为 null。"
+    },
+
+    "gates": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "description": "七个硬门禁的状态数组，顺序固定为 Gate 1 到 Gate 7，与 AGENTS.md 中的硬门禁一一对应。",
+      "items": {
+        "$ref": "#/definitions/gate"
+      }
+    },
+
+    "stateHistory": {
+      "type": "array",
+      "minItems": 1,
+      "description": "状态转换历史，按时间升序排列。首次转换 from 为 null。",
+      "items": {
+        "$ref": "#/definitions/stateTransition"
+      }
+    },
+
+    "feedbackLoop": {
+      "$ref": "#/definitions/feedbackLoop",
+      "description": "反馈循环追踪——当门禁失败后需要重试时更新此对象。"
+    },
+
+    "fallbackEvents": {
+      "type": "array",
+      "description": "已发生的降级事件列表，与 fallback-matrix.md 中的定义对应。",
+      "items": {
+        "$ref": "#/definitions/fallbackEvent"
+      }
+    },
+
+    "humanDecisions": {
+      "type": "array",
+      "description": "人类在所有门禁处做出的决策记录，每个决策可追溯至具体门禁和时间。",
+      "items": {
+        "$ref": "#/definitions/humanDecision"
+      }
+    },
+
+    "branchTasks": {
+      "type": "array",
+      "description": "S4 之后产生的并行分支信息。分支不得跳过 S6 或 S7。",
+      "items": {
+        "$ref": "#/definitions/branchTask"
+      }
+    },
+
+    "metadata": {
+      "type": "object",
+      "description": "扩展元数据。可存放任意键值对，如 repo 路径、相关 issue 编号、标签等。",
+      "additionalProperties": true
+    }
+  },
+
+  "definitions": {
+    "gate": {
+      "type": "object",
+      "description": "单个硬门禁的完整状态。每个门禁在实现前、实现中和实现后都受到确定性检查。",
+      "required": ["gateId", "status", "artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "gateId": {
+          "type": "string",
+          "enum": ["gate-1", "gate-2", "gate-3", "gate-4", "gate-5", "gate-6", "gate-7"],
+          "description": "门禁编号。gate-1=规格就绪, gate-2=风险就绪, gate-3=任务就绪, gate-4=实现就绪, gate-5=审查就绪, gate-6=已验证, gate-7=知识已捕获。"
+        },
+
+        "label": {
+          "type": "string",
+          "description": "门禁的人类可读标签。例如 '规格就绪'、'风险就绪'、'任务就绪'。"
+        },
+
+        "status": {
+          "type": "string",
+          "enum": ["pending", "passed", "failed", "skipped"],
+          "description": "门禁当前状态。pending=尚未进入此门禁; passed=确定性检查通过; failed=检查未通过，需修正后重试; skipped=经人类明确豁免或条件不适用而跳过。"
+        },
+
+        "artifacts": {
+          "type": "array",
+          "description": "此门禁所需的产物文件路径列表，相对于功能文件夹根目录（workflow/features/<featureId>/）。gate-check.sh 将逐项检查这些文件是否存在且非空。",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          },
+          "minItems": 1
+        },
+
+        "checkResults": {
+          "type": "object",
+          "description": "最近一次确定性检查（gate-check.sh）的结果。由脚本或人工检查后填入。",
+          "additionalProperties": false,
+          "properties": {
+            "checkedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "检查执行时间，ISO 8601。"
+            },
+            "checkedBy": {
+              "type": "string",
+              "description": "检查执行者。若由脚本执行则为 'script:gate-check.sh'，若人工执行则标注 'human' 或 Agent 名。"
+            },
+            "allArtifactsPresent": {
+              "type": "boolean",
+              "description": "所有 requiredArtifacts 是否均已存在且通过最小大小检查。"
+            },
+            "schemaValid": {
+              "type": "boolean",
+              "description": "feature-state.json 是否通过结构校验（必需字段、枚举值、数组长度等）。"
+            },
+            "missingArtifacts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "未找到或过小的产物文件路径列表。"
+            },
+            "schemaErrors": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "结构校验中发现的具体错误信息列表。"
+            }
+          }
+        },
+
+        "findings": {
+          "type": "array",
+          "description": "此门禁执行过程中发现的问题（grill-me 风险、审查意见、验证缺口等）。",
+          "items": {
+            "$ref": "#/definitions/finding"
+          }
+        },
+
+        "decisions": {
+          "type": "array",
+          "description": "此门禁处做出的决策记录（人类审批、风险接受、方案选择等）。",
+          "items": {
+            "$ref": "#/definitions/decision"
+          }
+        },
+
+        "enteredAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "首次进入此门禁的时间，ISO 8601。尚未进入时为 null。"
+        },
+
+        "resolvedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "门禁通过/跳过的时间，ISO 8601。尚未解决时为 null。"
+        }
+      }
+    },
+
+    "stateTransition": {
+      "type": "object",
+      "description": "一条状态转换记录。每次 currentState 变更时必须追加一条。",
+      "required": ["from", "to", "timestamp", "trigger"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": ["string", "null"],
+          "enum": ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", null],
+          "description": "源状态。首次转换时 from 为 null（表示从无状态进入 S0）。"
+        },
+        "to": {
+          "type": "string",
+          "enum": ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"],
+          "description": "目标状态。"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "状态转换发生时间，ISO 8601。"
+        },
+        "trigger": {
+          "type": "string",
+          "enum": ["gate-passed", "gate-skipped", "human-override", "agent-handoff", "fallback", "auto-advance"],
+          "description": "触发转换的原因。gate-passed=门禁通过; gate-skipped=门禁豁免跳过; human-override=人类直接干预; agent-handoff=交接触发; fallback=降级协议触发; auto-advance=前序条件满足自动推进。"
+        },
+        "actor": {
+          "type": "string",
+          "description": "执行转换的实体：claude、codex、human、dispatcher。"
+        },
+        "handoffFile": {
+          "type": "string",
+          "description": "若转换由交接触发，指向具体的交接文件路径（如 workflow/handoffs/claude-to-codex.md）。"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "转换备注，说明为什么发生此转换。"
+        }
+      }
+    },
+
+    "finding": {
+      "type": "object",
+      "description": "门禁执行过程中发现的一个问题。可来自 grill-me、代码审查、验证等任何阶段。",
+      "required": ["severity", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "严重级别。P0=数据丢失/安全漏洞/生产事故; P1=用户可见功能错误; P2=可维护性/技术债务; P3=打磨/改进建议。"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["security", "contract", "data", "performance", "spec-gap", "missing-test", "scope-creep", "other"],
+          "description": "发现类别，与审查模板中的分类对应。"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "description": "发现的具体描述，应包含足够上下文供后续决策。"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["grill-me", "code-review", "architecture-review", "verification", "gate-check", "human"],
+          "description": "发现的来源。"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "accepted", "fixed", "deferred", "rejected"],
+          "default": "open",
+          "description": "发现的处置状态。"
+        },
+        "acceptedBy": {
+          "type": ["string", "null"],
+          "description": "若风险被接受，记录接受者（human、claude、codex）。未接受时为 null。"
+        },
+        "acceptedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "风险被接受的时间，ISO 8601。未接受时为 null。"
+        }
+      }
+    },
+
+    "decision": {
+      "type": "object",
+      "description": "一个在门禁处做出的决策记录。人类决策使用学习型 Checkpoint 六段格式呈现。",
+      "required": ["decisionId", "madeBy", "madeAt", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "decisionId": {
+          "type": "string",
+          "pattern": "^dec-[a-z0-9-]+$",
+          "description": "决策唯一标识，格式为 dec-<gateId>-<序号>，如 'dec-gate-1-001'。"
+        },
+        "madeBy": {
+          "type": "string",
+          "enum": ["human", "claude", "codex"],
+          "description": "决策者。"
+        },
+        "madeAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "决策时间，ISO 8601。"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 10,
+          "description": "决策摘要，一句话说明做了什么样的选择。"
+        },
+        "optionsPresented": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "呈现给决策者的选项列表（来自学习型 Checkpoint 的 Options 表格）。"
+        },
+        "chosenOption": {
+          "type": "string",
+          "description": "被选中的选项标识。"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "决策理由，说明为什么选择这个选项而非其他。"
+        },
+        "revisitTrigger": {
+          "type": "string",
+          "description": "在什么条件下应重新审视此决策（如 '功能用户量突破 1000'、'数据模型 v2 上线后'）。"
+        },
+        "checkpointFormat": {
+          "type": "boolean",
+          "default": false,
+          "description": "此决策是否使用了学习型 Checkpoint 六段结构（背景-分析-经验课堂-选项-推荐-决策）呈现。"
+        }
+      }
+    },
+
+    "feedbackLoop": {
+      "type": "object",
+      "description": "反馈循环追踪信息。当门禁失败后需要重试时，此对象记录失败历史、注入的反馈和重试策略。防止无限重试和静默失败。",
+      "additionalProperties": false,
+      "properties": {
+        "retryCount": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "当前门禁的累计重试次数。每次门禁通过后重置为 0。门禁切换时也重置。"
+        },
+        "maxRetries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "自动重试上限。超过此值必须触发人类 Checkpoint，停止自动重试循环。"
+        },
+        "lastFailure": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "最近一次失败的时间，ISO 8601。无失败时为 null。"
+        },
+        "lastFailureReason": {
+          "type": ["string", "null"],
+          "description": "最近一次失败的原因简述，用于快速判断失败模式。无失败时为 null。"
+        },
+        "lastFailureGate": {
+          "type": ["string", "null"],
+          "enum": ["gate-1", "gate-2", "gate-3", "gate-4", "gate-5", "gate-6", "gate-7", null],
+          "description": "最近一次失败发生在哪个门禁。无失败时为 null。"
+        },
+        "feedbackInjected": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否已将失败反馈注入到下一次尝试中（如修正 spec 缺口、补充测试、修复代码）。若已注入但仍失败，说明修正策略无效，需要不同的方法。"
+        },
+        "feedbackSource": {
+          "type": ["string", "null"],
+          "description": "反馈来源：human、grill-me、review、gate-check。无反馈时为 null。"
+        },
+        "feedbackSummary": {
+          "type": ["string", "null"],
+          "description": "注入的反馈内容摘要，说明上次失败后采取了什么修正措施。无反馈时为 null。"
+        },
+        "retryHistory": {
+          "type": "array",
+          "description": "每次重试的详细记录，按时间升序排列。用于分析失败模式和防止重复无效尝试。",
+          "items": {
+            "$ref": "#/definitions/retryEntry"
+          }
+        },
+        "stalledSince": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "若门禁持续 failed 未推进，记录开始停滞的时间。未停滞时为 null。超过 48h 触发人类不可用协议（参见 fallback-matrix.md）。"
+        }
+      }
+    },
+
+    "retryEntry": {
+      "type": "object",
+      "description": "单次重试的完整记录。每次门禁失败后若进行修正并重试，应追加一条。",
+      "required": ["attempt", "attemptedAt", "failedGate", "failureReason", "actionTaken"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "重试序号，从 1 开始递增。"
+        },
+        "attemptedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "本次重试尝试的时间，ISO 8601。"
+        },
+        "failedGate": {
+          "type": "string",
+          "enum": ["gate-1", "gate-2", "gate-3", "gate-4", "gate-5", "gate-6", "gate-7"],
+          "description": "失败所在的门禁。"
+        },
+        "failureReason": {
+          "type": "string",
+          "description": "本次失败的具体原因。"
+        },
+        "actionTaken": {
+          "type": "string",
+          "description": "为修正失败所采取的措施（如 '补充 Acceptance Criteria 章节'、'修复 contract 不一致'、'添加缺失的边界测试'）。"
+        },
+        "result": {
+          "type": "string",
+          "enum": ["retrying", "passed", "failed-again", "escalated"],
+          "description": "本次重试的结果。retrying=修正后等待下次检查; passed=修正后通过; failed-again=修正无效再次失败; escalated=升级至人类决策。"
+        },
+        "retryHandoffFile": {
+          "type": "string",
+          "description": "若重试涉及 Agent 交接，指向具体的交接文件路径。"
+        }
+      }
+    },
+
+    "fallbackEvent": {
+      "type": "object",
+      "description": "一次降级事件。当某个工作流能力（Agent、工具、通道）不可用时记录。",
+      "required": ["eventType", "occurredAt", "stateAtTime"],
+      "additionalProperties": false,
+      "properties": {
+        "eventType": {
+          "type": "string",
+          "enum": [
+            "openspec_unavailable",
+            "grill_unavailable",
+            "challenger_unreachable",
+            "orchestrator_unreachable",
+            "find_skill_unavailable",
+            "superpowers_unavailable",
+            "reviewer_unreachable",
+            "tests_unavailable",
+            "mcp_unavailable",
+            "network_unavailable",
+            "human_unavailable",
+            "agent_disagreement",
+            "partial_grill",
+            "partial_review",
+            "multiple_tool_failures"
+          ],
+          "description": "降级事件类型，与 fallback-matrix.md 中的定义对应。"
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "事件发生时间，ISO 8601。"
+        },
+        "stateAtTime": {
+          "type": "string",
+          "enum": ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"],
+          "description": "事件发生时的当前状态。"
+        },
+        "description": {
+          "type": "string",
+          "description": "事件的详细描述。"
+        },
+        "resolution": {
+          "type": "string",
+          "enum": ["manual-workaround", "single-agent-mode", "waiting", "escalated", "resolved"],
+          "description": "降级应对措施。manual-workaround=手动替代; single-agent-mode=切换至单 Agent 模式; waiting=等待恢复; escalated=升级至人类; resolved=已恢复正常。"
+        },
+        "resolvedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "事件解决时间，ISO 8601。未解决则为 null。"
+        }
+      }
+    },
+
+    "humanDecision": {
+      "type": "object",
+      "description": "一个人类做出的门禁决策。用于追溯哪些决策是人类介入的结果。",
+      "required": ["decisionId", "gateId", "madeAt", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "decisionId": {
+          "type": "string",
+          "description": "决策唯一标识，与其他决策记录关联。"
+        },
+        "gateId": {
+          "type": "string",
+          "enum": ["gate-1", "gate-2", "gate-3", "gate-4", "gate-5", "gate-6", "gate-7", "S0", "S4", "S5", "S7"],
+          "description": "触发此决策的门禁或状态。S4 对应领域知识/权限 Checkpoint，S5 对应工作量爆炸 Checkpoint，S7 对应验收失败 Checkpoint。"
+        },
+        "madeAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "决策时间，ISO 8601。"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 10,
+          "description": "决策摘要。"
+        },
+        "checkpointFormat": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否使用了学习型 Checkpoint 六段结构（背景-分析-经验课堂-选项-推荐-决策）呈现。"
+        },
+        "outcome": {
+          "type": "string",
+          "description": "决策结果，如 '选择了方案 A'、'豁免此门禁'、'缩减范围'。"
+        }
+      }
+    },
+
+    "branchTask": {
+      "type": "object",
+      "description": "S4 后产生的并行工作分支。每个分支独立走 S5→S6→S7→S8，最后合并。",
+      "required": ["branchId", "tasks", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "branchId": {
+          "type": "string",
+          "description": "分支标识符，如 'branch-A'、'branch-B'。"
+        },
+        "tasks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "此分支包含的任务 ID 列表，对应 03-task-skill-map.md 中的任务编号。",
+          "minItems": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "in_progress", "completed", "failed"],
+          "description": "分支整体状态。"
+        },
+        "startedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "分支开始时间，ISO 8601。尚未开始则为 null。"
+        },
+        "completedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "分支完成时间，ISO 8601。尚未完成则为 null。"
+        },
+        "reviewStatus": {
+          "type": "string",
+          "enum": ["pending", "passed", "changes-requested"],
+          "description": "分支合并前的审查状态。"
+        }
+      }
+    }
+  },
+
+  "examples": [
+    {
+      "$schema": "https://codex-claude-workflow/feature-state.schema.json",
+      "featureId": "ai-werewolf",
+      "humanReadableName": "AI 狼人杀 Web 游戏",
+      "currentState": "S4",
+      "orchestrator": "claude",
+      "challenger": "codex",
+      "mode": "dual-agent",
+      "codexStatus": "reachable",
+      "claudeStatus": "reachable",
+      "mcpStatus": "up",
+      "createdAt": "2026-06-10T08:00:00Z",
+      "updatedAt": "2026-06-16T14:30:00Z",
+      "completedAt": null,
+
+      "gates": [
+        {
+          "gateId": "gate-1",
+          "label": "规格就绪",
+          "status": "passed",
+          "artifacts": [
+            "01-openspec-proposal.md"
+          ],
+          "checkResults": {
+            "checkedAt": "2026-06-10T09:15:00Z",
+            "checkedBy": "script:gate-check.sh",
+            "allArtifactsPresent": true,
+            "schemaValid": true,
+            "missingArtifacts": [],
+            "schemaErrors": []
+          },
+          "findings": [],
+          "decisions": [
+            {
+              "decisionId": "dec-gate-1-001",
+              "madeBy": "human",
+              "madeAt": "2026-06-10T10:00:00Z",
+              "summary": "选择暗黑哥特风格作为视觉方向，v1 仅支持 6 人标准局",
+              "optionsPresented": [
+                "方案 A: 暗黑哥特风格 + 6 人局",
+                "方案 B: 卡通风格 + 6/9/12 人局",
+                "方案 C: 极简文本风格 + 全角色"
+              ],
+              "chosenOption": "方案 A",
+              "rationale": "暗黑风格契合狼人杀主题，v1 聚焦核心玩法验证，后续版本扩展角色和人数",
+              "revisitTrigger": "v1 上线后根据玩家留存数据决定是否扩展人数和角色",
+              "checkpointFormat": true
+            }
+          ],
+          "enteredAt": "2026-06-10T08:00:00Z",
+          "resolvedAt": "2026-06-10T10:00:00Z"
+        },
+        {
+          "gateId": "gate-2",
+          "label": "风险就绪",
+          "status": "passed",
+          "artifacts": [
+            "02-grill-me-report.md"
+          ],
+          "checkResults": {
+            "checkedAt": "2026-06-11T16:00:00Z",
+            "checkedBy": "script:gate-check.sh",
+            "allArtifactsPresent": true,
+            "schemaValid": true,
+            "missingArtifacts": [],
+            "schemaErrors": []
+          },
+          "findings": [
+            {
+              "severity": "P2",
+              "category": "performance",
+              "description": "AI 发言生成在高并发下可能超过 3s 超时，建议添加请求队列和降级文案",
+              "source": "grill-me",
+              "status": "accepted",
+              "acceptedBy": "claude",
+              "acceptedAt": "2026-06-11T16:00:00Z"
+            }
+          ],
+          "decisions": [],
+          "enteredAt": "2026-06-11T10:00:00Z",
+          "resolvedAt": "2026-06-11T17:00:00Z"
+        },
+        {
+          "gateId": "gate-3",
+          "label": "任务就绪",
+          "status": "passed",
+          "artifacts": [
+            "03-task-skill-map.md"
+          ],
+          "checkResults": {
+            "checkedAt": "2026-06-12T11:00:00Z",
+            "checkedBy": "script:gate-check.sh",
+            "allArtifactsPresent": true,
+            "schemaValid": true,
+            "missingArtifacts": [],
+            "schemaErrors": []
+          },
+          "findings": [],
+          "decisions": [],
+          "enteredAt": "2026-06-12T09:00:00Z",
+          "resolvedAt": "2026-06-12T11:00:00Z"
+        },
+        {
+          "gateId": "gate-4",
+          "label": "实现就绪",
+          "status": "pending",
+          "artifacts": [
+            "04-implementation-plan.md"
+          ],
+          "findings": [],
+          "decisions": [],
+          "enteredAt": null,
+          "resolvedAt": null
+        },
+        {
+          "gateId": "gate-5",
+          "label": "审查就绪",
+          "status": "pending",
+          "artifacts": [
+            "reviews/claude-review.md",
+            "reviews/codex-review.md"
+          ],
+          "findings": [],
+          "decisions": [],
+          "enteredAt": null,
+          "resolvedAt": null
+        },
+        {
+          "gateId": "gate-6",
+          "label": "已验证",
+          "status": "pending",
+          "artifacts": [
+            "05-verification-log.md"
+          ],
+          "findings": [],
+          "decisions": [],
+          "enteredAt": null,
+          "resolvedAt": null
+        },
+        {
+          "gateId": "gate-7",
+          "label": "知识已捕获",
+          "status": "pending",
+          "artifacts": [
+            "06-adr.md",
+            "07-task-retro.md"
+          ],
+          "findings": [],
+          "decisions": [],
+          "enteredAt": null,
+          "resolvedAt": null
+        }
+      ],
+
+      "stateHistory": [
+        {
+          "from": null,
+          "to": "S0",
+          "timestamp": "2026-06-10T08:00:00Z",
+          "trigger": "human-override",
+          "actor": "human",
+          "notes": "人类发起新功能：AI 狼人杀 Web 游戏"
+        },
+        {
+          "from": "S0",
+          "to": "S1",
+          "timestamp": "2026-06-10T08:05:00Z",
+          "trigger": "auto-advance",
+          "actor": "claude",
+          "notes": "功能文件夹创建完毕，进入 OpenSpec 草案编写"
+        },
+        {
+          "from": "S1",
+          "to": "S2",
+          "timestamp": "2026-06-10T10:05:00Z",
+          "trigger": "gate-passed",
+          "actor": "claude",
+          "notes": "Gate 1 通过：人类审批了设计决策（暗黑哥特风格 + 6 人局）"
+        },
+        {
+          "from": "S2",
+          "to": "S3",
+          "timestamp": "2026-06-11T17:00:00Z",
+          "trigger": "gate-passed",
+          "actor": "codex",
+          "handoffFile": "workflow/handoffs/codex-to-claude.md",
+          "notes": "Codex 完成 grill-me，P2 性能风险已接受"
+        },
+        {
+          "from": "S3",
+          "to": "S4",
+          "timestamp": "2026-06-12T11:00:00Z",
+          "trigger": "gate-passed",
+          "actor": "claude",
+          "notes": "Gate 2 通过：规格已根据 grill-me 修正，Gate 3 任务映射表已就绪"
+        }
+      ],
+
+      "feedbackLoop": {
+        "retryCount": 0,
+        "maxRetries": 3,
+        "lastFailure": null,
+        "lastFailureReason": null,
+        "lastFailureGate": null,
+        "feedbackInjected": false,
+        "feedbackSource": null,
+        "feedbackSummary": null,
+        "retryHistory": [],
+        "stalledSince": null
+      },
+
+      "fallbackEvents": [
+        {
+          "eventType": "mcp_unavailable",
+          "occurredAt": "2026-06-11T10:00:00Z",
+          "stateAtTime": "S2",
+          "description": "MCP 通道短暂不可用，Codex 通过 CLI 打印模式完成 grill-me 交接",
+          "resolution": "resolved",
+          "resolvedAt": "2026-06-11T10:30:00Z"
+        }
+      ],
+
+      "humanDecisions": [
+        {
+          "decisionId": "dec-gate-1-style-scope",
+          "gateId": "gate-1",
+          "madeAt": "2026-06-10T10:00:00Z",
+          "summary": "选择暗黑哥特风格 + 6 人标准局作为 v1 范围",
+          "checkpointFormat": true,
+          "outcome": "方案 A 被选中，v1 聚焦核心玩法验证"
+        }
+      ],
+
+      "branchTasks": [
+        {
+          "branchId": "branch-A",
+          "tasks": ["T1-game-engine", "T2-ai-speech"],
+          "status": "pending",
+          "reviewStatus": "pending"
+        },
+        {
+          "branchId": "branch-B",
+          "tasks": ["T3-frontend-ui", "T4-websocket"],
+          "status": "pending",
+          "reviewStatus": "pending"
+        }
+      ],
+
+      "metadata": {
+        "repo": "https://github.com/example/ai-werewolf",
+        "relatedIssues": ["#42", "#57"],
+        "tags": ["game", "ai", "websocket", "react"]
+      }
+    }
+  ]
+}

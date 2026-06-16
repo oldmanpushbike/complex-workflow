@@ -1,0 +1,163 @@
+{
+  "//": "──────────────────────────────────────────────────────────────────",
+  "//_1": " Claude Code 确定性门禁层（Layer 2）配置文件",
+  "//_2": " 基于 .claude/settings.example.json 扩展，激活实际约束。",
+  "//_3": " 与 workflow/feature-state.schema.json + workflow/scripts/gate-check.sh 协同工作。",
+  "//_4": "──────────────────────────────────────────────────────────────────",
+
+  "workflow": {
+    "primaryInstructions": [
+      "CLAUDE.md",
+      "AGENTS.md",
+      "workflow/dispatcher.md"
+    ],
+    "featureArtifacts": "workflow/features/<feature-id>/",
+    "fallbackMatrix": "workflow/fallback-matrix.md",
+    "featureStateSchema": "workflow/feature-state.schema.json",
+    "gateCheckScript": "workflow/scripts/gate-check.sh"
+  },
+
+  "//_hooks": "─────────────────── Hook 定义 ───────────────────",
+  "//_hooks_note": "Hook 机制是确定性门禁层的实时拦截层。每个 hook 在对应事件触发时运行 shell 命令；命令返回非零退出码则阻止操作。",
+
+  "hooks": {
+    "//_PreToolUse": "工具调用前拦截。用于在 Agent 越界操作（如跳过门禁直接写代码）时阻断。",
+    "PreToolUse": [
+      {
+        "//": "门禁写保护：拦截对 feature-state.json 的手动 currentState 跳跃。",
+        "//_note": "只允许 gate-check.sh 通过的环境变量标记来放行合法的状态更新。",
+        "matcher": "Write|Edit",
+        "matcher_description": "匹配所有文件写入和编辑操作。",
+        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -q \"feature-state.json\"; then if [ \"$CLAUDE_HOOK_ALLOW_STATE_UPDATE\" != \"1\" ]; then echo \"[GATE-LAYER] BLOCKED: 禁止直接修改 feature-state.json。请运行 gate-check.sh 或由调度器执行状态转换。\"; exit 1; fi; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
+        "timeout": 5000
+      },
+      {
+        "//": "实现前门禁检查：在 Write/Edit 代码文件前，验证当前功能的 Gate 1-3 已通过。",
+        "//_note": "仅对 workflow/features/ 下有活跃功能的项目生效。不阻断 workflow/ 目录自身的写入。",
+        "matcher": "Write|Edit",
+        "matcher_description": "匹配所有文件写入操作。",
+        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -qE \"\\.(ts|tsx|js|jsx|py|go|rs|java|rb)$\" && ! echo \"$FILE\" | grep -q \"workflow/\"; then if [ -f workflow/scripts/gate-check.sh ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); if [ -n \"$FEATURE\" ]; then bash workflow/scripts/gate-check.sh \"$FEATURE\" --min-gate gate-3 > /dev/null 2>&1; if [ $? -ne 0 ]; then echo \"[GATE-LAYER] WARNING: Gate 1-3 未全部通过。实现前请确认规格已就绪。\"; fi; fi; fi; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
+        "timeout": 10000,
+        "onFailure": "warn"
+      }
+    ],
+
+    "//_PostToolUse": "工具调用后检查。用于在关键操作后验证状态一致性。",
+    "PostToolUse": [
+      {
+        "//": "状态文件写入后自动运行 gate-check 校验。",
+        "matcher": "Write|Edit",
+        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -q \"feature-state.json\"; then echo \"[GATE-LAYER] feature-state.json 已更新。正在运行 gate-check...\"; FEATURE=$(basename $(dirname \"$FILE\")); bash workflow/scripts/gate-check.sh \"$FEATURE\" 2>&1 || echo \"[GATE-LAYER] gate-check 返回非零，请检查缺失项。\"; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
+        "timeout": 15000
+      }
+    ],
+
+    "//_SessionStart": "会话启动时自动校验当前项目状态。",
+    "SessionStart": [
+      {
+        "//": "启动时检查所有功能的状态一致性。",
+        "matcher": "",
+        "command": "bash -c 'if [ -f workflow/scripts/gate-check.sh ]; then echo \"[GATE-LAYER] 会话启动：扫描活跃功能...\"; for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); echo \"  → 检查 $FEATURE...\"; bash workflow/scripts/gate-check.sh \"$FEATURE\" --quiet 2>&1 || echo \"  ⚠ $FEATURE: gate-check 未通过\"; fi; done; echo \"[GATE-LAYER] 扫描完成。\"; fi'",
+        "timeout": 30000
+      }
+    ],
+
+    "//_Stop": "会话结束时的事件。",
+    "Stop": [
+      {
+        "//": "会话结束时提醒未解决的门禁问题。",
+        "matcher": "",
+        "command": "bash -c 'if [ -f workflow/scripts/gate-check.sh ]; then for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); STATE=$(python3 -c \"import json; d=json.load(open(\\\"$d/feature-state.json\\\")); print(d.get(\\\"currentState\\\",\\\"?\\\"))\" 2>/dev/null || echo \"?\"); if [ \"$STATE\" != \"S9\" ] && [ \"$STATE\" != \"?\" ]; then echo \"[GATE-LAYER] 提醒: 功能 '$FEATURE' 仍在 $STATE 状态，未归档。\"; fi; fi; done; fi'",
+        "timeout": 10000
+      }
+    ]
+  },
+
+  "//_permissions": "─────────────────── 权限配置 ───────────────────",
+  "//_permissions_note": "权限是门禁层的第二道防线。即使 Agent 模型输出越界指令，权限配置也会拦截。",
+
+  "permissions": {
+    "//_allow": "显式允许的操作。",
+
+    "allow": [
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(python3:*)",
+      "Bash(curl:*)",
+      "WebSearch",
+      "WebFetch",
+      "Skill(*)",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskGet",
+      "TaskList"
+    ],
+
+    "//_ask": "需要每次询问人类的操作。",
+    "ask": [
+      "Bash(gh:*)",
+      "Bash(docker:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(sudo:*)",
+      "Bash(chmod:*)",
+      "Bash(chown:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(>*)",
+      "Bash(>>*)"
+    ],
+
+    "//_deny": "显式禁止的操作（安全硬阻断）。",
+    "deny": [
+      "Bash(curl:*| sh)",
+      "Bash(wget:*| sh)",
+      "Bash(:(){ :|:& };:)",
+      "Bash(rm -rf /:*)",
+      "Bash(mkfs:*)",
+      "Bash(dd if=* of=/dev/*)"
+    ],
+
+    "//_additionalDirectories": "可访问的额外目录（除项目根目录外）。",
+    "additionalDirectories": [
+      "/tmp/codex-claude-workflow/"
+    ],
+
+    "//_defaultMode": "未匹配任何规则时的默认权限模式。",
+    "defaultMode": "ask"
+  },
+
+  "//_env": "─────────────────── 环境变量 ───────────────────",
+  "env": {
+    "CLAUDE_HOOK_ALLOW_STATE_UPDATE": {
+      "//": "由 gate-check.sh 在执行合法状态更新时临时设为 1。正常会话期间不应设置此变量。",
+      "default": "0"
+    },
+    "GATE_CHECK_STRICT_MODE": {
+      "//": "设为 1 时 gate-check.sh 在 schema 校验失败时返回非零（fail-closed）。默认 1。",
+      "default": "1"
+    },
+    "WORKFLOW_FEATURES_DIR": {
+      "//": "功能文件夹根目录。默认 workflow/features/。",
+      "default": "workflow/features"
+    }
+  },
+
+  "//_model": "─────────────────── 模型配置 ───────────────────",
+  "model": {
+    "//": "使用 deepseek-v4-pro 以获得最佳指令遵循和门禁检查精度。"
+  },
+
+  "//_systemPrompt": "─────────────────── 系统提示 ───────────────────",
+  "systemPrompt": {
+    "//_append": "追加到默认系统提示的内容（注入确定性门禁层意识）。",
+    "append": "你运行在确定性门禁层（Layer 2）环境中。每次状态转换前必须调用 workflow/scripts/gate-check.sh 验证。文件系统是唯一真相源——不相信记忆，只相信磁盘上的产物文件。"
+  }
+}

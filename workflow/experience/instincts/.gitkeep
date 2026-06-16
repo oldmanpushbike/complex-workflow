@@ -1,0 +1,7 @@
+# 此目录存放 Instinct（本能）文件
+# 结构：instincts/<instinct-name>.md
+# 详见 workflow/experience/pipeline.md
+#
+# Instinct 是已注入系统文件的可执行规则，
+# 此处的文件仅作为溯源记录——实际的规则已写入
+# AGENTS.md / CLAUDE.md / CODEX.md / state-machine.md 等

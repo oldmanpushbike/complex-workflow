@@ -10,8 +10,20 @@
 
 - **人类让我启动一个新的功能吗？** → 你是**编排者**。
 - **Claude 交接了工作或请求了审查吗？** → 你是**挑战者/审查者**。
+- **状态文件（feature-state.json）将你路由到此会话吗？** → 进入 **dispatcher 模式**。
+  读取 `workflow/dispatcher.md`，由 `feature-state.json` 的 `orchestrator` 字段决定你的实际角色（编排者或挑战者），严格遵循调度器的路由指令。此模式下你的自主决策权受限——你是确定性执行器，而非自主 Agent。
 
-不确定时，阅读 `workflow/state-machine.md` 和当前的功能文件夹。
+不确定时，阅读 `workflow/state-machine.md`、`workflow/dispatcher.md` 和当前的功能文件夹。
+
+---
+
+## 新机制文件
+
+本工作流引入了以下机制文件，编排者和挑战者均需了解其存在与用途：
+
+- **反馈循环** (`workflow/feedback-loop.md`)：门禁失败后的自适应纠错层。定义失败分析、修正注入、回退重试、人类升级的完整协议。dispatcher 在每次状态转换前调用 `gate-check.sh`，若返回 fail 则进入反馈循环。状态文件中的 `feedbackLoop` 字段记录重试计数、失败原因和修正历史。
+- **续跑协议** (`workflow/resume-protocol.md`)：Agent 中断后的确定性恢复体系。定义如何从文件系统（非聊天历史）恢复上下文、通过回归信号检测另一 Agent 的回归、以及单/双 Agent 模式切换时的验证排队机制。与 `fallback-matrix.md` 互补——降级矩阵定义降级路径，续跑协议定义恢复路径。
+- **经验管道** (`workflow/experience/pipeline.md`)：Lesson → Pattern → Instinct 三级经验进化体系。使单次功能的失败教训（Lesson）跨功能归纳为抽象模式（Pattern），最终沉淀为可自动执行的系统本能规则（Instinct）。每次 S8 知识捕获完成后，经验应流入此管道。
 
 ---
 
@@ -28,11 +40,14 @@ OpenSpec → grill-me(Claude) → skill-router → implement → review(Claude) 
 1. 阅读 `AGENTS.md`。
 2. 阅读 `CODEX.md`（本文件）。
 3. 检查项目根目录是否存在 `CLAUDE.md`、`AGENTS.md` 和 `workflow/`。若缺失，从本包复制。
-4. 在 `workflow/features/<feature-id>/` 下创建功能文件夹。
-5. 填写 `01-openspec-proposal.md`。
-6. **若为全新功能（非增量修改）：** 将关键设计决策呈现给人类审批。按门禁 1 的规定，人类拥有规模、视觉风格、技术栈、功能范围和用户角色的选择权。使用学习型 Checkpoint 六段格式。
-7. 人类审批后（增量修改可跳过此步）：将提案发送给 Claude 进行 grill-me 挑战（技术风险审查——Agent 领地，非设计决策）。通过 CLI、MCP 或交接文件。
-8. 在 grill-me 风险解决或明确接受之前，不得开始实现。
+4. **检查 dispatcher 状态：** 扫描 `workflow/features/` 下是否存在 `feature-state.json`。
+   - 若存在：读取 `currentState`、`mode`、`orchestrator`、`gates[].status`、`feedbackLoop`。运行 `bash workflow/scripts/gate-check.sh <feature-id>` 确认文件系统一致性。根据 `workflow/resume-protocol.md` 第四章判断中断类型和恢复策略。
+   - 若不存在：确认无活跃功能，准备创建新功能。
+5. 在 `workflow/features/<feature-id>/` 下创建功能文件夹。
+6. 填写 `01-openspec-proposal.md`。
+7. **若为全新功能（非增量修改）：** 将关键设计决策呈现给人类审批。按门禁 1 的规定，人类拥有规模、视觉风格、技术栈、功能范围和用户角色的选择权。使用学习型 Checkpoint 六段格式。
+8. 人类审批后（增量修改可跳过此步）：将提案发送给 Claude 进行 grill-me 挑战（技术风险审查——Agent 领地，非设计决策）。通过 CLI、MCP 或交接文件。
+9. 在 grill-me 风险解决或明确接受之前，不得开始实现。
 
 ### 编排者职责
 
@@ -67,6 +82,7 @@ OpenSpec → grill-me(Claude) → skill-router → implement → review(Claude) 
 7. 将每个审查标记为 `single-agent`。
 8. 在 `workflow/handoffs/codex-to-claude.md` 中编写交接记录，供 Claude 后续验证。
 9. 在验证日志中记录降级情况。
+10. **若 Claude 恢复可用：** 遵循 `workflow/resume-protocol.md` 的回归检测（第二章）和模式切换协议（第三章）。所有在 single-agent 下通过的制品将自动排入回归验证队列。
 
 绝不跳过门禁。降级的是能力，不是流程。
 
@@ -80,7 +96,8 @@ Claude 是编排者。你的工作是压力测试和验证。
 
 1. 阅读当前功能的 `01-openspec-proposal.md`。
 2. 阅读最新的 grill-me 报告或审查请求。
-3. 识别 Claude 要求你做的：
+3. **检查 dispatcher 状态：** 读取 `workflow/features/<feature-id>/feature-state.json`，确认 `currentState` 和 `challenger` 字段与你当前应扮演的角色一致。运行 `bash workflow/scripts/gate-check.sh <feature-id>` 检查产物完整性。若 `mode` 为 `single-agent`，执行 `workflow/resume-protocol.md` 的回归检测以判断编排者是否已恢复可达。
+4. 识别 Claude 要求你做的：
    - **grill-me** → 攻击提案
    - **code review** → 对照规格审查实现
    - **verify** → 运行测试并确认行为

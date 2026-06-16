@@ -1,0 +1,3 @@
+# 此目录存放各功能的 Lesson（教训）文件
+# 结构：lessons/<feature-id>/lesson-<序号>.md
+# 详见 workflow/experience/pipeline.md

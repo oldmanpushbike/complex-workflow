@@ -1,0 +1,1712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workflow Health Dashboard — AI Agent 工作流评估仪表盘</title>
+<!-- Chart.js CDN — 离线时降级为内联 SVG -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  /* ============================================================
+     Dark Theme + Gold Accents
+     Visual identity matching the 学习型Checkpoint framework
+     ============================================================ */
+  :root {
+    --bg-root: #090c10;
+    --bg-primary: #0d1117;
+    --bg-secondary: #141820;
+    --bg-tertiary: #1a1f2b;
+    --bg-card: #13171f;
+    --bg-sidebar: #0f1319;
+    --border: #252b33;
+    --border-light: #1e242c;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #5d6670;
+
+    /* Gold accent palette */
+    --gold: #d4a843;
+    --gold-light: #e8c860;
+    --gold-dark: #a67c20;
+    --gold-bg: rgba(212, 168, 67, 0.07);
+    --gold-border: rgba(212, 168, 67, 0.25);
+    --gold-glow: rgba(212, 168, 67, 0.15);
+
+    /* Semantic accents */
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-blue: #58a6ff;
+    --accent-purple: #a371f7;
+    --accent-teal: #39d353;
+    --accent-orange: #f0883e;
+
+    --shadow: 0 2px 8px rgba(0,0,0,0.5);
+    --radius: 8px;
+    --radius-sm: 5px;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-root);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ---- Scrollbar ---- */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--gold-dark); }
+
+  /* ============ Layout ============ */
+  .app-container {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 28px 36px;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto auto auto;
+    gap: 0;
+  }
+
+  /* ---- Header (full width) ---- */
+  .app-header {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 28px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--gold-border);
+  }
+
+  .app-header h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--gold-light) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .app-header .subtitle {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 3px;
+  }
+
+  .app-header .subtitle .dot {
+    color: var(--gold);
+    margin: 0 6px;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  /* ---- Buttons ---- */
+  .btn {
+    padding: 7px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: var(--font-sans);
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--gold); background: var(--gold-bg); color: var(--gold-light); }
+  .btn-primary { background: linear-gradient(135deg, var(--gold-dark), var(--gold)); border-color: var(--gold); color: #0d1117; font-weight: 600; }
+  .btn-primary:hover { background: linear-gradient(135deg, var(--gold), var(--gold-light)); color: #0d1117; }
+  .btn-sm { padding: 4px 12px; font-size: 11px; }
+
+  /* ============ Summary Cards (full width) ============ */
+  .summary-grid {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .summary-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+  .summary-card:hover {
+    border-color: var(--gold-border);
+    box-shadow: 0 0 20px var(--gold-glow);
+  }
+
+  .summary-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .summary-card:hover::before { opacity: 1; }
+
+  .summary-card .card-icon {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+
+  .summary-card .card-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .summary-card .card-value {
+    font-size: 34px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    line-height: 1.1;
+  }
+
+  .summary-card .card-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  .card-value.gold   { color: var(--gold-light); }
+  .card-value.green  { color: var(--accent-green); }
+  .card-value.yellow { color: var(--accent-yellow); }
+  .card-value.red    { color: var(--accent-red); }
+  .card-value.blue   { color: var(--accent-blue); }
+
+  /* ============ Main Content Area ============ */
+  .main-content {
+    grid-column: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* ---- Sidebar ---- */
+  .sidebar {
+    grid-column: 2;
+    grid-row: 3 / span 4;
+    margin-left: 24px;
+    position: sticky;
+    top: 28px;
+    align-self: start;
+    max-height: calc(100vh - 56px);
+    overflow-y: auto;
+  }
+
+  .sidebar-section {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .sidebar-section h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--gold);
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--gold-border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sidebar-section h3 .count-badge {
+    font-size: 11px;
+    background: var(--gold-bg);
+    color: var(--gold-light);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+    margin-left: auto;
+  }
+
+  .lesson-item, .pattern-item {
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    margin-bottom: 10px;
+    transition: border-color 0.2s;
+  }
+  .lesson-item:hover, .pattern-item:hover {
+    border-color: var(--gold-border);
+  }
+
+  .lesson-item .lesson-id,
+  .pattern-item .pattern-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--gold);
+    margin-bottom: 2px;
+  }
+
+  .lesson-item .lesson-title,
+  .pattern-item .pattern-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    line-height: 1.4;
+  }
+
+  .lesson-item .lesson-meta,
+  .pattern-item .pattern-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .lesson-item .lesson-excerpt,
+  .pattern-item .pattern-excerpt {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .severity-p0 { color: var(--accent-red); font-weight: 700; }
+  .severity-p1 { color: var(--accent-orange); font-weight: 600; }
+  .severity-p2 { color: var(--accent-yellow); }
+  .severity-p3 { color: var(--text-muted); }
+
+  /* ============ Section ============ */
+  .section { margin-bottom: 4px; }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .section-header h2 {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .section-header .section-badge {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: 3px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  /* ============ Table ============ */
+  .table-container {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: auto;
+  }
+
+  thead { background: var(--bg-tertiary); }
+
+  th {
+    padding: 11px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--gold-border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(37,43,51,0.5);
+    white-space: nowrap;
+  }
+
+  tbody tr { transition: background 0.15s; }
+  tbody tr:hover { background: var(--gold-bg); }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ---- Gate Progress Bar ---- */
+  .gate-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 160px;
+  }
+
+  .gate-progress .gate-dots {
+    display: flex;
+    gap: 3px;
+  }
+
+  .gate-progress .gate-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: all 0.3s ease;
+  }
+
+  .gate-dot.passed  { background: #1a3a1a; border-color: var(--accent-green); }
+  .gate-dot.failed  { background: #3a1a1a; border-color: var(--accent-red); }
+  .gate-dot.active  { background: #3a2e0a; border-color: var(--gold); animation: dot-pulse 1.5s infinite; }
+  .gate-dot.waived  { background: #1a2e3a; border-color: var(--accent-blue); }
+
+  @keyframes dot-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--gold-glow); }
+    50%      { box-shadow: 0 0 6px 2px var(--gold-glow); }
+  }
+
+  .gate-progress .gate-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  /* ---- Status Badges ---- */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .badge-pass   { background: rgba(63,185,80,0.12);  color: var(--accent-green);  border: 1px solid rgba(63,185,80,0.2); }
+  .badge-warn   { background: rgba(210,153,34,0.12);  color: var(--accent-yellow); border: 1px solid rgba(210,153,34,0.2); }
+  .badge-fail   { background: rgba(248,81,73,0.12);   color: var(--accent-red);    border: 1px solid rgba(248,81,73,0.2); }
+  .badge-info   { background: rgba(88,166,255,0.1);   color: var(--accent-blue);   border: 1px solid rgba(88,166,255,0.18); }
+  .badge-gold   { background: var(--gold-bg);          color: var(--gold-light);    border: 1px solid var(--gold-border); }
+  .badge-purple { background: rgba(163,113,247,0.1);   color: var(--accent-purple); border: 1px solid rgba(163,113,247,0.18); }
+
+  .state-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  /* ============ Chart Areas ============ */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .chart-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+
+  .chart-card h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .chart-card .chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 240px;
+  }
+
+  .chart-card .chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .chart-fallback {
+    display: none;
+    width: 100%;
+    height: 240px;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+  }
+
+  .chart-fallback svg { width: 100%; height: 100%; }
+
+  /* ============ Empty State ============ */
+  .empty-state {
+    text-align: center;
+    padding: 50px 20px;
+    color: var(--text-secondary);
+  }
+  .empty-state .empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.5; }
+  .empty-state p { font-size: 13px; max-width: 360px; margin: 0 auto; color: var(--text-muted); }
+
+  /* ============ Pulse indicator ============ */
+  .pulse {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .pulse.live   { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); animation: pulse-glow 2s infinite; }
+  .pulse.stale  { background: var(--accent-yellow); }
+  .pulse.dead   { background: var(--accent-red); }
+
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  /* ============ Tooltip ============ */
+  [data-tooltip] {
+    position: relative;
+    cursor: help;
+    border-bottom: 1px dotted var(--text-muted);
+  }
+  [data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 120%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1c2333;
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 5px;
+    font-size: 11px;
+    white-space: nowrap;
+    border: 1px solid var(--border);
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  /* ============ Footer ============ */
+  .app-footer {
+    grid-column: 1 / -1;
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .app-footer .footer-gold {
+    color: var(--gold);
+  }
+
+  /* ============ Responsive ============ */
+  @media (max-width: 1100px) {
+    .app-container {
+      grid-template-columns: 1fr;
+    }
+    .sidebar {
+      grid-column: 1;
+      grid-row: auto;
+      margin-left: 0;
+      margin-top: 28px;
+      position: static;
+      max-height: none;
+    }
+    .charts-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .app-container { padding: 16px; }
+    .app-header { flex-direction: column; gap: 12px; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .header-actions { flex-wrap: wrap; }
+  }
+
+  @media (max-width: 480px) {
+    .summary-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ============ Print ============ */
+  @media print {
+    body { background: white; color: black; }
+    .btn { display: none; }
+    .sidebar { display: none; }
+    .summary-card, .chart-card { border-color: #ccc; break-inside: avoid; }
+    .app-container { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app-container">
+  <!-- ============ Header ============ -->
+  <header class="app-header">
+    <div>
+      <h1>Workflow Health Dashboard</h1>
+      <p class="subtitle">
+        确定性评分引擎驱动<span class="dot">·</span>零 LLM 调用<span class="dot">·</span>
+        数据源: <span id="data-source-label" style="color:var(--gold);">加载中...</span>
+      </p>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-sm" onclick="loadMockData()" title="加载内置示例数据以预览仪表盘">📊 加载示例</button>
+      <button class="btn btn-sm" onclick="loadFromJSON()" title="手动粘贴 JSON 功能状态数组">📋 粘贴 JSON</button>
+      <button class="btn btn-sm" onclick="tryFetchFeatureStates()" title="尝试从 workflow/features/ 自动发现 feature-state.json">🔍 自动发现</button>
+      <button class="btn btn-sm" onclick="exportReport()">📥 导出报告</button>
+    </div>
+  </header>
+
+  <!-- ============ Summary Cards ============ -->
+  <div class="summary-grid" id="summaryGrid">
+    <div class="summary-card">
+      <div class="card-icon">📋</div>
+      <div class="card-label">活跃功能</div>
+      <div class="card-value gold" id="activeFeatureCount">--</div>
+      <div class="card-sub" id="activeFeatureSub"></div>
+    </div>
+
+    <div class="summary-card">
+      <div class="card-icon">✅</div>
+      <div class="card-label">门禁通过率</div>
+      <div class="card-value green" id="gatePassRate">--</div>
+      <div class="card-sub" id="gatePassSub"></div>
+    </div>
+
+    <div class="summary-card">
+      <div class="card-icon">⚠️</div>
+      <div class="card-label">降级事件</div>
+      <div class="card-value yellow" id="degradationTotal">--</div>
+      <div class="card-sub" id="degradationSub"></div>
+    </div>
+
+    <div class="summary-card">
+      <div class="card-icon">🧠</div>
+      <div class="card-label">经验沉淀</div>
+      <div class="card-value blue" id="experienceTotal">--</div>
+      <div class="card-sub" id="experienceSub"></div>
+    </div>
+  </div>
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar" id="sidebar">
+    <!-- Populated by JS -->
+  </aside>
+
+  <!-- ============ Main Content ============ -->
+  <div class="main-content">
+    <!-- Feature Status Table -->
+    <div class="section">
+      <div class="section-header">
+        <h2>功能状态一览</h2>
+        <span class="section-badge" id="featureTableCount">0 个功能</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>功能 ID</th>
+              <th>名称</th>
+              <th>当前状态</th>
+              <th>模式</th>
+              <th>门禁进度</th>
+              <th>评分</th>
+              <th>vs 基线</th>
+              <th>降级</th>
+              <th>最后活动</th>
+            </tr>
+          </thead>
+          <tbody id="featureTableBody">
+            <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:40px;">暂无数据 — 点击"加载示例"开始</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Trend Charts -->
+    <div class="section">
+      <div class="section-header">
+        <h2>趋势与分析</h2>
+        <span class="section-badge" id="chartDataLabel">需要至少 2 个功能</span>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>📈 门禁通过率趋势</h3>
+          <div class="chart-wrap"><canvas id="chartGateTrend"></canvas></div>
+          <div class="chart-fallback" id="chartGateFallback"></div>
+        </div>
+        <div class="chart-card">
+          <h3>📊 降级模式频率</h3>
+          <div class="chart-wrap"><canvas id="chartDegradation"></canvas></div>
+          <div class="chart-fallback" id="chartDegFallback"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Footer ============ -->
+  <footer class="app-footer">
+    <span>Scoring Engine v1 · Deterministic · Zero-LLM</span>
+    <span>基线: <span class="footer-gold" id="footerBaseline">72</span> · 最近评分: <span id="footerLastScored">--</span></span>
+  </footer>
+</div>
+
+<!-- ============================================================
+     Scoring Engine + Dashboard Logic (in-browser, zero LLM)
+     ============================================================ -->
+<script>
+'use strict';
+
+// ============ Configuration ============
+const BASELINE = {
+  totalScore: 72,
+  dimensions: {
+    gateIntegrity: 85, artifactCompleteness: 78,
+    degradationHealth: 80, reviewDepth: 65,
+    feedbackEfficacy: 75, cycleVelocity: 60, humanTouch: 55
+  }
+};
+
+const FALLBACK_WEIGHTS = {
+  'orchestrator_unreachable': 5, 'human_unavailable': 5,
+  'agent_disagreement': 4, 'multiple_tool_failures': 4,
+  'challenger_unreachable': 3, 'reviewer_unreachable': 3,
+  'tests_unavailable': 2, 'grill_unavailable': 2,
+  'superpowers_unavailable': 2, 'openspec_unavailable': 1,
+  'find_skill_unavailable': 1, 'mcp_unavailable': 1,
+  'network_unavailable': 1, 'partial_grill': 1, 'partial_review': 1
+};
+
+const FALLBACK_LABELS = {
+  'challenger_unreachable': '挑战者不可达', 'reviewer_unreachable': '审查者不可达',
+  'orchestrator_unreachable': '编排者不可达', 'agent_disagreement': 'Agent分歧',
+  'tests_unavailable': '测试不可用', 'grill_unavailable': 'Grill不可用',
+  'superpowers_unavailable': 'Superpowers不可用', 'openspec_unavailable': 'OpenSpec不可用',
+  'find_skill_unavailable': '技能路由不可用', 'mcp_unavailable': 'MCP不可用',
+  'network_unavailable': '网络不可用', 'human_unavailable': '人类不可达',
+  'partial_grill': '部分Grill', 'partial_review': '部分审查',
+  'multiple_tool_failures': '多重工具故障'
+};
+
+const STATE_COLORS = {
+  'S0': '#5d6670', 'S1': '#58a6ff', 'S2': '#58a6ff',
+  'S3': '#58a6ff', 'S4': '#f0883e', 'S5': '#f0883e',
+  'S6': '#a371f7', 'S7': '#a371f7', 'S8': '#39d353', 'S9': '#3fb950'
+};
+
+const STATE_LABELS = {
+  'S0':'待摄入','S1':'规格编写','S2':'风险审查(grill-me)','S3':'规格修正',
+  'S4':'任务规划','S5':'实现中','S6':'代码审查','S7':'验证',
+  'S8':'知识捕获','S9':'已归档'
+};
+
+// ============ 7-Dimension Scoring (identical to scoring-engine.md) ============
+
+function scoreGateIntegrity(feature) {
+  const gates = feature.gates || [];
+  if (gates.length === 0) return { score: 0, raw: '无门禁' };
+  const stIdx = ['S0','S1','S2','S3','S4','S5','S6','S7','S8','S9'].indexOf(feature.currentState);
+  const maxGate = stIdx >= 9 ? 7 : Math.min(7, stIdx + 1);
+  let passed = 0;
+  for (let i = 0; i < maxGate; i++) {
+    const g = gates[i];
+    if (g && (g.status === 'passed' || g.status === 'waived' || g.status === 'skipped')) passed++;
+  }
+  return { score: Math.round((passed / maxGate) * 100), raw: `${passed}/${maxGate}` };
+}
+
+function scoreArtifactCompleteness(feature) {
+  const gates = feature.gates || [];
+  let present = 0, total = 0;
+  for (const g of gates) {
+    if (g.checkResults) {
+      total++;
+      if (g.checkResults.allArtifactsPresent) present++;
+    }
+  }
+  if (total === 0) {
+    const expected = Math.min(gates.length, 7);
+    const passed = gates.filter(g => g.status === 'passed' || g.status === 'waived' || g.status === 'skipped').length;
+    return { score: expected > 0 ? Math.round((passed / expected) * 100) : 0, raw: `${passed}/${expected}` };
+  }
+  return { score: Math.round((present / total) * 100), raw: `${present}/${total}` };
+}
+
+function scoreDegradationHealth(feature) {
+  const events = feature.fallbackEvents || [];
+  if (events.length === 0) return { score: 100, raw: '零事件' };
+  let sw = 0;
+  for (const e of events) sw += FALLBACK_WEIGHTS[e.eventType] || 1;
+  return { score: Math.max(0, 100 - sw * 5), raw: `${events.length}事件, 权重${sw}` };
+}
+
+function scoreReviewDepth(feature) {
+  const gates = feature.gates || [];
+  const gate5 = gates[4];
+  const findings = gate5 ? (gate5.findings || []) : [];
+  const F = findings.length;
+  if (F === 0) return { score: 0, raw: '无审查发现' };
+  const P0 = findings.filter(f => f.severity === 'P0').length;
+  const P1 = findings.filter(f => f.severity === 'P1').length;
+  let score = Math.min(100, Math.min(F * 10, 60) + P0 * 10 + P1 * 5);
+  if (feature.mode === 'single-agent') score = Math.round(score * 0.7);
+  return { score, raw: `${F}发现(P0:${P0} P1:${P1})` };
+}
+
+function scoreFeedbackEfficacy(feature) {
+  const fb = feature.feedbackLoop;
+  if (!fb || (fb.retryCount === 0 && !fb.lastFailure)) return { score: 100, raw: '无失败' };
+  if (fb.stalledSince) {
+    const hrs = (Date.now() - new Date(fb.stalledSince).getTime()) / 3600000;
+    if (hrs > 48) return { score: 0, raw: `停滞${hrs.toFixed(0)}h` };
+  }
+  let s = 50;
+  if (fb.feedbackInjected) s += 30;
+  if (fb.retryCount < (fb.maxRetries || 3)) s += 10;
+  if (fb.feedbackSource && fb.feedbackSource.length > 0) s += 10;
+  return { score: s, raw: `重试${fb.retryCount||0}/${fb.maxRetries||3}` };
+}
+
+function scoreCycleVelocity(feature) {
+  const h = feature.stateHistory || [];
+  if (h.length < 2) return { score: null, raw: '转移不足' };
+  const EXPECTED = {
+    'S0→S1':2,'S1→S2':4,'S2→S3':1,'S3→S4':1,
+    'S4→S5':2,'S5→S6':null,'S6→S7':2,'S7→S8':1,'S8→S9':1
+  };
+  let scores = [];
+  for (let i = 1; i < h.length; i++) {
+    const key = h[i-1].to + '→' + h[i].to;
+    const exp = EXPECTED[key];
+    if (exp === null || exp === undefined) continue;
+    const hrs = (new Date(h[i].timestamp) - new Date(h[i-1].timestamp)) / 3600000;
+    if (hrs <= 0) continue;
+    if (hrs < 0.083 && (key === 'S2→S3' || key === 'S6→S7')) { scores.push(0); continue; }
+    scores.push(Math.max(0, 100 - Math.max(0, hrs - exp) * 10));
+  }
+  if (scores.length === 0) return { score: null, raw: '无可评分转移' };
+  return { score: Math.round(scores.reduce((a,b)=>a+b,0) / scores.length), raw: `${scores.length}次转移` };
+}
+
+function scoreHumanTouch(feature) {
+  const decisions = feature.humanDecisions || [];
+  const H = decisions.length;
+  if (H === 0) return { score: 0, raw: '零人工参与' };
+  let base;
+  if (H <= 1) base = 25;
+  else if (H === 2) base = 50;
+  else if (H === 3) base = 80;
+  else if (H === 4) base = 100;
+  else base = Math.max(20, 100 - (H - 4) * 15);
+
+  const covered = new Set(decisions.map(d => d.gateId));
+  let crit = 0;
+  for (const g of ['gate-1','gate-2','S4','S7']) { if (covered.has(g)) crit++; }
+  const cpCount = decisions.filter(d => d.checkpointFormat).length;
+  return { score: Math.min(100, base + crit * 5 + Math.min(20, cpCount * 5)), raw: `${H}决策` };
+}
+
+function computeFullScore(feature) {
+  const dims = {
+    gateIntegrity: scoreGateIntegrity(feature),
+    artifactCompleteness: scoreArtifactCompleteness(feature),
+    degradationHealth: scoreDegradationHealth(feature),
+    reviewDepth: scoreReviewDepth(feature),
+    feedbackEfficacy: scoreFeedbackEfficacy(feature),
+    cycleVelocity: scoreCycleVelocity(feature),
+    humanTouch: scoreHumanTouch(feature)
+  };
+  const w = [0.20,0.20,0.15,0.15,0.10,0.10,0.10];
+  let total = 0, tw = 0, i = 0;
+  for (const dim of Object.values(dims)) {
+    if (dim.score !== null) { total += dim.score * w[i]; tw += w[i]; }
+    i++;
+  }
+  return { dimensions: dims, total: tw > 0 ? Math.round(total / tw) : null };
+}
+
+// ============ Embedded Sample Data ============
+
+function buildSampleData() {
+  const now = new Date();
+  function ago(h) { return new Date(now - h*3600000).toISOString(); }
+
+  return [
+    // Feature 1: Completed & archived
+    {
+      featureId: 'ai-werewolf',
+      humanReadableName: 'AI 狼人杀 Web 游戏',
+      currentState: 'S9',
+      orchestrator: 'claude',
+      challenger: 'codex',
+      mode: 'dual-agent',
+      codexStatus: 'reachable',
+      claudeStatus: 'reachable',
+      updatedAt: ago(12),
+      createdAt: ago(220),
+      completedAt: ago(12),
+      gates: [
+        { gateId:'gate-1', label:'规格就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(210) }, findings:[], decisions:[{ decisionId:'dec-1', madeBy:'human', summary:'选定暗黑哥特风格+6人局', checkpointFormat:true }] },
+        { gateId:'gate-2', label:'风险就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(190) }, findings:[{severity:'P2',category:'performance',description:'AI发言高并发超时风险',source:'grill-me',status:'accepted'}] },
+        { gateId:'gate-3', label:'任务就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(175) }, findings:[] },
+        { gateId:'gate-4', label:'实现就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(160) }, findings:[] },
+        { gateId:'gate-5', label:'审查就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(80) }, findings:[
+          {severity:'P0',category:'security',description:'LLM API Key 前端暴露',source:'code-review',status:'fixed'},
+          {severity:'P1',category:'data',description:'游戏状态未持久化',source:'code-review',status:'fixed'},
+          {severity:'P1',category:'contract',description:'WebSocket 消息格式未定义 Schema',source:'code-review',status:'accepted'},
+          {severity:'P2',category:'missing-test',description:'夜间回合缺少边界测试',source:'code-review',status:'fixed'}
+        ] },
+        { gateId:'gate-6', label:'已验证', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(36) }, findings:[] },
+        { gateId:'gate-7', label:'知识已捕获', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(12) }, findings:[] }
+      ],
+      fallbackEvents: [
+        { eventType:'mcp_unavailable', occurredAt:ago(195), stateAtTime:'S2', description:'MCP通道短暂不可用，Codex通过CLI打印模式完成grill-me', resolution:'resolved', resolvedAt:ago(194) }
+      ],
+      feedbackLoop: { retryCount:0, maxRetries:3, lastFailure:null, feedbackInjected:false, feedbackSource:null, retryHistory:[], stalledSince:null },
+      humanDecisions: [
+        { decisionId:'hd-1', gateId:'gate-1', madeAt:ago(210), summary:'选择方案A：暗黑哥特风格+6人局', checkpointFormat:true, outcome:'v1聚焦核心玩法验证' },
+        { decisionId:'hd-2', gateId:'gate-2', madeAt:ago(190), summary:'接受P2性能风险：后续迭代增加请求队列', checkpointFormat:true, outcome:'风险暂记，v2处理' },
+        { decisionId:'hd-3', gateId:'S7', madeAt:ago(36), summary:'验收通过：核心玩法流畅，6人局无阻塞', checkpointFormat:false, outcome:'批准归档' }
+      ],
+      stateHistory: [
+        { from:null, to:'S0', timestamp:ago(220), trigger:'human-override', actor:'human' },
+        { from:'S0', to:'S1', timestamp:ago(218), trigger:'auto-advance', actor:'claude' },
+        { from:'S1', to:'S2', timestamp:ago(212), trigger:'gate-passed', actor:'claude' },
+        { from:'S2', to:'S3', timestamp:ago(190), trigger:'gate-passed', actor:'codex' },
+        { from:'S3', to:'S4', timestamp:ago(188), trigger:'gate-passed', actor:'claude' },
+        { from:'S4', to:'S5', timestamp:ago(186), trigger:'gate-passed', actor:'claude' },
+        { from:'S5', to:'S6', timestamp:ago(100), trigger:'gate-passed', actor:'claude' },
+        { from:'S6', to:'S7', timestamp:ago(80), trigger:'gate-passed', actor:'codex' },
+        { from:'S7', to:'S8', timestamp:ago(36), trigger:'gate-passed', actor:'claude' },
+        { from:'S8', to:'S9', timestamp:ago(12), trigger:'gate-passed', actor:'human' }
+      ],
+      metadata: { tags:['game','ai','websocket','react'] }
+    },
+    // Feature 2: In review (single-agent mode)
+    {
+      featureId: 'gate-layer-v2',
+      humanReadableName: '门禁层 v2 确定性重构',
+      currentState: 'S6',
+      orchestrator: 'codex',
+      challenger: 'manual',
+      mode: 'single-agent',
+      codexStatus: 'reachable',
+      claudeStatus: 'unreachable',
+      updatedAt: ago(3),
+      createdAt: ago(160),
+      completedAt: null,
+      gates: [
+        { gateId:'gate-1', label:'规格就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(150) }, findings:[] },
+        { gateId:'gate-2', label:'风险就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(130) }, findings:[{severity:'P1',category:'contract',description:'gate-check.sh 与 schema 校验逻辑可能不一致',source:'grill-me',status:'fixed'}] },
+        { gateId:'gate-3', label:'任务就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(120) }, findings:[] },
+        { gateId:'gate-4', label:'实现就绪', status:'passed', checkResults:{ allArtifactsPresent:true, checkedAt:ago(100) }, findings:[] },
+        { gateId:'gate-5', label:'审查就绪', status:'in_progress', checkResults:{}, findings:[{severity:'P1',category:'performance',description:'大型 feature-state.json 解析性能瓶颈',source:'code-review',status:'open'}] },
+        { gateId:'gate-6', label:'已验证', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-7', label:'知识已捕获', status:'pending', checkResults:{}, findings:[] }
+      ],
+      fallbackEvents: [
+        { eventType:'challenger_unreachable', occurredAt:ago(135), stateAtTime:'S2', description:'Claude Code 不可达，手动执行 grill-me', resolution:'manual-workaround', resolvedAt:ago(132) },
+        { eventType:'reviewer_unreachable', occurredAt:ago(10), stateAtTime:'S6', description:'Claude Code 不可达，执行单人自审', resolution:'single-agent-mode', resolvedAt:null }
+      ],
+      feedbackLoop: { retryCount:1, maxRetries:3, lastFailure:ago(50), lastFailureReason:'Gate 4 产物缺失 04-implementation-plan.md', lastFailureGate:'gate-4', feedbackInjected:true, feedbackSource:'gate-check', feedbackSummary:'补充了实现计划文档', retryHistory:[{attempt:1,attemptedAt:ago(55),failedGate:'gate-4',failureReason:'产物缺失',actionTaken:'编写04-implementation-plan.md',result:'passed'}], stalledSince:null },
+      humanDecisions: [
+        { decisionId:'hd-4', gateId:'gate-1', madeAt:ago(150), summary:'选定确定性校验方案，放弃LLM-based校验', checkpointFormat:true, outcome:'v2架构确定' }
+      ],
+      stateHistory: [
+        { from:null, to:'S0', timestamp:ago(160), trigger:'human-override', actor:'human' },
+        { from:'S0', to:'S1', timestamp:ago(158), trigger:'auto-advance', actor:'codex' },
+        { from:'S1', to:'S2', timestamp:ago(152), trigger:'gate-passed', actor:'codex' },
+        { from:'S2', to:'S3', timestamp:ago(130), trigger:'fallback', actor:'codex' },
+        { from:'S3', to:'S4', timestamp:ago(124), trigger:'gate-passed', actor:'codex' },
+        { from:'S4', to:'S5', timestamp:ago(120), trigger:'gate-passed', actor:'codex' },
+        { from:'S5', to:'S6', timestamp:ago(15), trigger:'gate-passed', actor:'codex' }
+      ],
+      metadata: { tags:['infra','gate-check','refactor'] }
+    },
+    // Feature 3: Early stage
+    {
+      featureId: 'eval-dashboard',
+      humanReadableName: '评估仪表盘与可视化',
+      currentState: 'S1',
+      orchestrator: 'claude',
+      challenger: 'codex',
+      mode: 'dual-agent',
+      codexStatus: 'reachable',
+      claudeStatus: 'reachable',
+      updatedAt: ago(1),
+      createdAt: ago(24),
+      completedAt: null,
+      gates: [
+        { gateId:'gate-1', label:'规格就绪', status:'in_progress', checkResults:{}, findings:[] },
+        { gateId:'gate-2', label:'风险就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-3', label:'任务就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-4', label:'实现就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-5', label:'审查就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-6', label:'已验证', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-7', label:'知识已捕获', status:'pending', checkResults:{}, findings:[] }
+      ],
+      fallbackEvents: [],
+      feedbackLoop: { retryCount:0, maxRetries:3, lastFailure:null, feedbackInjected:false, feedbackSource:null, retryHistory:[], stalledSince:null },
+      humanDecisions: [],
+      stateHistory: [
+        { from:null, to:'S0', timestamp:ago(24), trigger:'human-override', actor:'human' },
+        { from:'S0', to:'S1', timestamp:ago(23), trigger:'auto-advance', actor:'claude' }
+      ],
+      metadata: { tags:['dashboard','visualization','eval'] }
+    },
+    // Feature 4: Stalled / problematic
+    {
+      featureId: 'legacy-migration',
+      humanReadableName: '旧版脚本迁移 v1→v2',
+      currentState: 'S3',
+      orchestrator: 'codex',
+      challenger: 'none',
+      mode: 'single-agent',
+      codexStatus: 'degraded',
+      claudeStatus: 'unreachable',
+      updatedAt: ago(72),
+      createdAt: ago(200),
+      completedAt: null,
+      gates: [
+        { gateId:'gate-1', label:'规格就绪', status:'passed', checkResults:{ allArtifactsPresent:true }, findings:[] },
+        { gateId:'gate-2', label:'风险就绪', status:'failed', checkResults:{ allArtifactsPresent:true }, findings:[{severity:'P0',category:'spec-gap',description:'迁移范围未定义——多少脚本？哪些已废弃？',source:'grill-me',status:'open'}] },
+        { gateId:'gate-3', label:'任务就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-4', label:'实现就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-5', label:'审查就绪', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-6', label:'已验证', status:'pending', checkResults:{}, findings:[] },
+        { gateId:'gate-7', label:'知识已捕获', status:'pending', checkResults:{}, findings:[] }
+      ],
+      fallbackEvents: [
+        { eventType:'grill_unavailable', occurredAt:ago(140), stateAtTime:'S2', description:'Codex不可达，手动grill-me', resolution:'manual-workaround' },
+        { eventType:'human_unavailable', occurredAt:ago(100), stateAtTime:'S3', description:'等待人类澄清迁移范围，超过48h', resolution:'waiting' }
+      ],
+      feedbackLoop: {
+        retryCount:2, maxRetries:3,
+        lastFailure:ago(100), lastFailureReason:'Gate 2 失败：迁移范围未定义', lastFailureGate:'gate-2',
+        feedbackInjected:false, feedbackSource:null,
+        retryHistory: [
+          { attempt:1, attemptedAt:ago(140), failedGate:'gate-2', failureReason:'grill-me范围缺失', actionTaken:'补充部分脚本清单（不完整）', result:'failed-again' },
+          { attempt:2, attemptedAt:ago(100), failedGate:'gate-2', failureReason:'人类未响应范围问题', actionTaken:'等待人类输入', result:'escalated' }
+        ],
+        stalledSince:ago(100)
+      },
+      humanDecisions: [
+        { decisionId:'hd-5', gateId:'gate-1', madeAt:ago(180), summary:'决定迁移所有遗留脚本', checkpointFormat:false, outcome:'范围定义为"所有"' }
+      ],
+      stateHistory: [
+        { from:null, to:'S0', timestamp:ago(200), trigger:'human-override', actor:'human' },
+        { from:'S0', to:'S1', timestamp:ago(198), trigger:'auto-advance', actor:'codex' },
+        { from:'S1', to:'S2', timestamp:ago(190), trigger:'gate-passed', actor:'codex' },
+        { from:'S2', to:'S3', timestamp:ago(100), trigger:'fallback', actor:'codex' }
+      ],
+      metadata: { tags:['migration','tech-debt','stalled'] }
+    }
+  ];
+}
+
+// ============ Embedded Sample Lessons & Patterns ============
+
+function buildSampleExperience() {
+  return {
+    lessons: [
+      {
+        id: 'LSN-ai-werewolf-001',
+        title: 'LLM API Key 在前端代码中短暂暴露',
+        featureId: 'ai-werewolf',
+        severity: 'P1',
+        tags: ['llm','api-proxy','security','credentials'],
+        excerpt: 'OpenSpec 中没有明确 API Key 的存储策略。实现者按"最快跑通"原则放在前端 env，在 S6 审查时被发现并修正为 Next.js Route Handler 代理。',
+        date: '2026-06-12'
+      },
+      {
+        id: 'LSN-ai-werewolf-002',
+        title: 'WebSocket 重连逻辑未在 OpenSpec 中定义',
+        featureId: 'ai-werewolf',
+        severity: 'P2',
+        tags: ['websocket','reliability','spec-gap'],
+        excerpt: '断线重连策略在实现阶段临时决定（指数退避），未经过设计审查。应在 S1 规格阶段明确所有网络异常处理路径。',
+        date: '2026-06-13'
+      },
+      {
+        id: 'LSN-gate-layer-v2-001',
+        title: '单Agent模式下的自审盲区',
+        featureId: 'gate-layer-v2',
+        severity: 'P1',
+        tags: ['single-agent','review','cognitive-bias'],
+        excerpt: '当Claude不可达时，Codex执行的自审遗漏了3个contract不一致问题。单人审查的折扣因子（0.7）在实践中可能仍然过于乐观。',
+        date: '2026-06-15'
+      },
+      {
+        id: 'LSN-legacy-migration-001',
+        title: '未定义范围导致grill-me阻塞',
+        featureId: 'legacy-migration',
+        severity: 'P0',
+        tags: ['scoping','gate-2','spec-quality'],
+        excerpt: '迁移范围定义为"所有遗留脚本"但未给出具体清单。grill-me无法评估风险，导致Gate 2失败后停滞超过48h。范围定义必须可验证。',
+        date: '2026-06-10'
+      }
+    ],
+    patterns: [
+      {
+        id: 'PTN-001',
+        name: 'credential-leakage-in-openspec-gap',
+        title: 'OpenSpec遗漏凭证策略导致实现中暴露',
+        status: 'active',
+        sourceLessons: ['LSN-ai-werewolf-001', 'LSN-gate-layer-v2-001'],
+        excerpt: '当OpenSpec模板缺少"敏感数据策略"节时，实现者会在S5自行决定凭证存储方式（倾向最快路径），在S6审查时被发现并返工。',
+        date: '2026-06-14'
+      },
+      {
+        id: 'PTN-002',
+        name: 'scope-vagueness-blocking-grill-me',
+        title: '范围定义模糊导致grill-me门禁阻塞',
+        status: 'review',
+        sourceLessons: ['LSN-legacy-migration-001'],
+        excerpt: '当OpenSpec的范围描述不可验证（如"所有X"、"必要的Y"），grill-me无法有效进行风险评估。Gate 1应增加"范围可验证性"检查。',
+        date: '2026-06-15'
+      }
+    ]
+  };
+}
+
+// ============ Global State ============
+let dashboardData = [];
+let chartInstances = {};
+
+// ============ Data Loading ============
+
+function loadMockData() {
+  dashboardData = buildSampleData();
+  document.getElementById('data-source-label').textContent = '内置示例数据';
+  renderAll();
+}
+
+function loadFromJSON() {
+  const input = prompt('请粘贴 JSON 数组（每个元素为一个 feature-state.json 对象）：');
+  if (!input) return;
+  try {
+    const parsed = JSON.parse(input);
+    dashboardData = Array.isArray(parsed) ? parsed : [parsed];
+    document.getElementById('data-source-label').textContent = '手动输入';
+    renderAll();
+  } catch(e) {
+    alert('JSON 解析失败: ' + e.message);
+  }
+}
+
+async function tryFetchFeatureStates() {
+  document.getElementById('data-source-label').textContent = '搜索中...';
+  // Try multiple discovery paths
+  const paths = [
+    '../features/',                              // from workflow/eval/
+    './features/',                                // from workflow/
+    '../../workflow/features/',                   // from something nested
+  ];
+  const candidates = [];
+  for (const base of paths) {
+    try {
+      const resp = await fetch(base);
+      if (!resp.ok) continue;
+      const text = await resp.text();
+      // Simple directory listing heuristic — look for subdirectories
+      const dirs = text.match(/href="([^"]+)\/"/g);
+      if (dirs) {
+        for (const d of dirs) {
+          const name = d.replace(/href="|"|\//g, '');
+          if (name && name !== '.' && name !== '..') {
+            candidates.push(base + name + '/feature-state.json');
+          }
+        }
+      }
+    } catch(e) { /* skip */ }
+  }
+
+  // Also try direct guess for test-gate-check
+  candidates.push('../features/test-gate-check/feature-state.json');
+  candidates.push('../../features/test-gate-check/feature-state.json');
+
+  const loaded = [];
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      if (json && json.featureId) loaded.push(json);
+    } catch(e) { /* skip */ }
+  }
+
+  if (loaded.length === 0) {
+    document.getElementById('data-source-label').textContent = '未发现功能文件 · 使用示例数据';
+    alert('未找到任何 feature-state.json 文件。已自动加载示例数据。');
+    loadMockData();
+    return;
+  }
+
+  dashboardData = loaded;
+  document.getElementById('data-source-label').textContent = `自动发现 (${loaded.length} 个功能)`;
+  renderAll();
+}
+
+// ============ Render All ============
+
+function renderAll() {
+  if (dashboardData.length === 0) {
+    showEmptyState();
+    return;
+  }
+
+  const scoredData = dashboardData.map(f => ({ feature: f, scores: computeFullScore(f) }));
+  const experience = buildSampleExperience();
+
+  renderSummaryCards(scoredData);
+  renderFeatureTable(scoredData);
+  renderSidebar(scoredData, experience);
+  renderCharts(scoredData);
+  updateFooter(scoredData);
+}
+
+function showEmptyState() {
+  document.getElementById('activeFeatureCount').textContent = '--';
+  document.getElementById('gatePassRate').textContent = '--';
+  document.getElementById('degradationTotal').textContent = '--';
+  document.getElementById('experienceTotal').textContent = '--';
+  document.getElementById('featureTableBody').innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:40px;">暂无数据 — 点击"加载示例"开始</td></tr>';
+  document.getElementById('sidebar').innerHTML = '<div class="sidebar-section"><h3>🧠 经验沉淀</h3><div class="empty-state"><div class="empty-icon">📭</div><p>加载数据后显示最近的教训与模式</p></div></div>';
+}
+
+// ============ Summary Cards ============
+
+function renderSummaryCards(scored) {
+  const validScored = scored.filter(s => s.scores.total !== null);
+
+  // 1. Active features (not archived)
+  const active = scored.filter(s => s.feature.currentState !== 'S9').length;
+  const archived = scored.filter(s => s.feature.currentState === 'S9').length;
+  document.getElementById('activeFeatureCount').textContent = active;
+  document.getElementById('activeFeatureSub').textContent = `${archived} 个已归档 · 共 ${scored.length} 个功能`;
+
+  // 2. Gate pass rate
+  let totalPassed = 0, totalGates = 0;
+  for (const { feature } of scored) {
+    const gates = feature.gates || [];
+    const stIdx = ['S0','S1','S2','S3','S4','S5','S6','S7','S8','S9'].indexOf(feature.currentState);
+    const maxGate = stIdx >= 9 ? 7 : Math.min(7, stIdx + 1);
+    for (let i = 0; i < maxGate; i++) {
+      totalGates++;
+      const g = gates[i];
+      if (g && (g.status === 'passed' || g.status === 'waived' || g.status === 'skipped')) totalPassed++;
+    }
+  }
+  const passRate = totalGates > 0 ? Math.round((totalPassed / totalGates) * 100) : 0;
+  const passEl = document.getElementById('gatePassRate');
+  passEl.textContent = passRate + '%';
+  passEl.className = 'card-value ' + (passRate >= 80 ? 'green' : passRate >= 50 ? 'yellow' : 'red');
+  document.getElementById('gatePassSub').textContent = `${totalPassed}/${totalGates} 门禁已通过`;
+
+  // 3. Degradation events
+  let totalDeg = 0;
+  const degTypes = new Map();
+  for (const { feature } of scored) {
+    for (const e of (feature.fallbackEvents || [])) {
+      totalDeg++;
+      degTypes.set(e.eventType, (degTypes.get(e.eventType) || 0) + 1);
+    }
+  }
+  const degEl = document.getElementById('degradationTotal');
+  degEl.textContent = totalDeg;
+  degEl.className = 'card-value ' + (totalDeg === 0 ? 'green' : totalDeg <= 3 ? 'yellow' : 'red');
+  document.getElementById('degradationSub').textContent = `${degTypes.size} 种类型 · ${scored.filter(s => (s.feature.fallbackEvents||[]).length > 0).length} 个受影响功能`;
+
+  // 4. Experience captured (lessons + patterns)
+  const exp = buildSampleExperience();
+  const totalExp = exp.lessons.length + exp.patterns.length;
+  document.getElementById('experienceTotal').textContent = totalExp;
+  document.getElementById('experienceTotal').className = 'card-value blue';
+  document.getElementById('experienceSub').textContent = `${exp.lessons.length} 教训 · ${exp.patterns.length} 模式`;
+}
+
+// ============ Feature Status Table ============
+
+function renderFeatureTable(scored) {
+  const tbody = document.getElementById('featureTableBody');
+  const sorted = [...scored].sort((a, b) => {
+    const order = ['S9','S8','S7','S6','S5','S4','S3','S2','S1','S0'];
+    return order.indexOf(a.feature.currentState) - order.indexOf(b.feature.currentState);
+  });
+
+  tbody.innerHTML = sorted.map(({ feature, scores }) => {
+    // Gate progress dots
+    const gates = feature.gates || [];
+    const dotColors = { 'passed':'passed', 'waived':'waived', 'skipped':'waived', 'failed':'failed', 'in_progress':'active', 'pending':'' };
+    const dotsHTML = gates.map(g => {
+      const cls = dotColors[g.status] || '';
+      return `<span class="gate-dot ${cls}" data-tooltip="Gate ${g.gateId}: ${g.status}"></span>`;
+    }).join('');
+
+    const passedCount = gates.filter(g => g.status === 'passed' || g.status === 'waived' || g.status === 'skipped').length;
+
+    // State badge
+    const stColor = STATE_COLORS[feature.currentState] || 'var(--text-primary)';
+    const stLabel = STATE_LABELS[feature.currentState] || feature.currentState;
+
+    // Score display
+    let scoreStr = '--', deltaStr = '--', deltaCls = '';
+    if (scores.total !== null) {
+      scoreStr = scores.total;
+      const d = scores.total - BASELINE.totalScore;
+      deltaStr = d >= 0 ? '+' + d : '' + d;
+      deltaCls = d >= 0 ? 'color:var(--accent-green)' : 'color:var(--accent-red)';
+    }
+
+    // Mode badge
+    const modeBadgeCls = feature.mode === 'dual-agent' ? 'badge-pass' : 'badge-warn';
+    const modeLabel = feature.mode === 'dual-agent' ? '双Agent' : '单Agent';
+
+    // Degradation badge
+    const degCount = (feature.fallbackEvents || []).length;
+    const degBadgeCls = degCount === 0 ? 'badge-pass' : degCount <= 2 ? 'badge-warn' : 'badge-fail';
+
+    // Last activity
+    const updated = new Date(feature.updatedAt);
+    const now = new Date();
+    const hoursAgo = Math.round((now - updated) / 3600000);
+    let timeAgoStr;
+    if (hoursAgo < 1) timeAgoStr = '刚刚';
+    else if (hoursAgo < 24) timeAgoStr = hoursAgo + 'h 前';
+    else timeAgoStr = Math.round(hoursAgo / 24) + 'd 前';
+
+    return `
+      <tr>
+        <td style="font-family:var(--font-mono);font-weight:600;font-size:12px;">${feature.featureId}</td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;" title="${feature.humanReadableName || feature.featureId}">${feature.humanReadableName || feature.featureId}</td>
+        <td><span class="state-badge" style="background:${stColor}15;color:${stColor};border:1px solid ${stColor}30;">${feature.currentState}</span> <span style="font-size:11px;color:var(--text-muted);">${stLabel}</span></td>
+        <td><span class="badge ${modeBadgeCls}">${modeLabel}</span></td>
+        <td>
+          <div class="gate-progress">
+            <div class="gate-dots">${dotsHTML}</div>
+            <span class="gate-label">${passedCount}/7</span>
+          </div>
+        </td>
+        <td style="font-family:var(--font-mono);font-weight:700;font-size:14px;">${scoreStr}</td>
+        <td style="font-family:var(--font-mono);font-size:12px;${deltaCls}">${deltaStr}</td>
+        <td><span class="badge ${degBadgeCls}">${degCount}</span></td>
+        <td style="font-size:12px;color:var(--text-secondary);">${timeAgoStr}</td>
+      </tr>`;
+  }).join('');
+
+  document.getElementById('featureTableCount').textContent = `${dashboardData.length} 个功能`;
+}
+
+// ============ Sidebar ============
+
+function renderSidebar(scored, experience) {
+  const sidebar = document.getElementById('sidebar');
+
+  // Feature status summary
+  const stateCounts = {};
+  for (const { feature } of scored) {
+    stateCounts[feature.currentState] = (stateCounts[feature.currentState] || 0) + 1;
+  }
+  const summaryStates = Object.entries(stateCounts)
+    .sort((a,b) => parseInt(b[0].slice(1)) - parseInt(a[0].slice(1)))
+    .map(([st, n]) => `<span style="display:inline-block;margin:0 6px 4px 0;font-size:11px;"><span style="color:${STATE_COLORS[st]};font-weight:600;">${st}</span> ×${n}</span>`)
+    .join('');
+
+  // Score distribution
+  const validScored = scored.filter(s => s.scores.total !== null);
+  const avgScore = validScored.length > 0
+    ? Math.round(validScored.reduce((a,b) => a + b.scores.total, 0) / validScored.length)
+    : null;
+
+  // Lessons feed
+  const lessonHTML = experience.lessons.map(l => `
+    <div class="lesson-item">
+      <div class="lesson-id">${l.id}</div>
+      <div class="lesson-title">${l.title}</div>
+      <div class="lesson-meta">
+        <span class="severity-${l.severity.toLowerCase()}">${l.severity}</span>
+        <span>${l.featureId}</span>
+        <span>${l.date}</span>
+      </div>
+      <div class="lesson-excerpt">${l.excerpt}</div>
+    </div>
+  `).join('');
+
+  // Patterns feed
+  const patternHTML = experience.patterns.map(p => `
+    <div class="pattern-item">
+      <div class="pattern-id">${p.id} · <span style="color:${p.status === 'active' ? 'var(--accent-green)' : 'var(--accent-yellow)'};">${p.status}</span></div>
+      <div class="pattern-title">${p.title}</div>
+      <div class="pattern-meta">
+        <span>${p.sourceLessons.length} 条教训来源</span>
+        <span>${p.date}</span>
+      </div>
+      <div class="pattern-excerpt">${p.excerpt}</div>
+    </div>
+  `).join('');
+
+  sidebar.innerHTML = `
+    <div class="sidebar-section">
+      <h3>📊 状态分布 <span class="count-badge">${scored.length}</span></h3>
+      <div style="margin-bottom:12px;">${summaryStates || '<span style="color:var(--text-muted);font-size:12px;">无数据</span>'}</div>
+      ${avgScore !== null ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-card);border-radius:6px;border:1px solid var(--border-light);">
+          <span style="font-size:12px;color:var(--text-secondary);">平均评分</span>
+          <span style="font-family:var(--font-mono);font-size:22px;font-weight:700;color:${avgScore >= 80 ? 'var(--accent-green)' : avgScore >= 60 ? 'var(--accent-yellow)' : 'var(--accent-red)'};">${avgScore}</span>
+          <span style="font-size:11px;color:var(--text-muted);">/ 100</span>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="sidebar-section">
+      <h3>📚 最近教训 <span class="count-badge">${experience.lessons.length}</span></h3>
+      ${lessonHTML}
+    </div>
+
+    <div class="sidebar-section">
+      <h3>🔮 经验模式 <span class="count-badge">${experience.patterns.length}</span></h3>
+      ${patternHTML}
+    </div>
+
+    <div class="sidebar-section">
+      <h3>📐 评分维度权重</h3>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:2;">
+        <div>门禁完整性 <span style="float:right;color:var(--gold-light);">20%</span></div>
+        <div>产物完备性 <span style="float:right;color:var(--gold-light);">20%</span></div>
+        <div>降级健康度 <span style="float:right;color:var(--gold-light);">15%</span></div>
+        <div>审查深度 <span style="float:right;color:var(--gold-light);">15%</span></div>
+        <div>反馈效能 <span style="float:right;color:var(--gold-light);">10%</span></div>
+        <div>流转速度 <span style="float:right;color:var(--gold-light);">10%</span></div>
+        <div>人工触点 <span style="float:right;color:var(--gold-light);">10%</span></div>
+      </div>
+    </div>
+  `;
+}
+
+// ============ Charts (Chart.js with fallback) ============
+
+function destroyCharts() {
+  for (const key of Object.keys(chartInstances)) {
+    if (chartInstances[key]) { chartInstances[key].destroy(); chartInstances[key] = null; }
+  }
+}
+
+function renderCharts(scored) {
+  destroyCharts();
+
+  const validScored = scored.filter(s => s.scores.total !== null);
+  const n = validScored.length;
+
+  document.getElementById('chartDataLabel').textContent = n >= 2
+    ? `${n} 个已评分功能`
+    : `需要至少 2 个已评分功能 (当前 ${n})`;
+
+  // ---- Chart 1: Gate Pass Rate Trend ----
+  if (n >= 2 && typeof Chart !== 'undefined') {
+    const labels = validScored.map(s => s.feature.featureId);
+    const data = validScored.map(s => s.scores.dimensions.gateIntegrity.score);
+    const baselineLine = Array(n).fill(BASELINE.dimensions.gateIntegrity);
+
+    const ctx = document.getElementById('chartGateTrend').getContext('2d');
+    chartInstances.gateTrend = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: '门禁完整性',
+            data,
+            borderColor: '#d4a843',
+            backgroundColor: 'rgba(212,168,67,0.08)',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: true,
+            pointBackgroundColor: data.map(v => v >= 85 ? '#3fb950' : v >= 60 ? '#d29922' : '#f85149'),
+            pointBorderColor: '#0d1117',
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+          },
+          {
+            label: '基线',
+            data: baselineLine,
+            borderColor: 'rgba(139,148,158,0.4)',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            fill: false,
+            pointRadius: 0,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            labels: { color: '#8b949e', font: { size: 11 }, usePointStyle: true, padding: 16 }
+          },
+          tooltip: {
+            backgroundColor: '#1a1f2b',
+            borderColor: 'rgba(212,168,67,0.3)',
+            borderWidth: 1,
+            titleColor: '#e6edf3',
+            bodyColor: '#8b949e',
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y} 分`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(37,43,51,0.4)' },
+            ticks: { color: '#8b949e', font: { size: 11 } }
+          },
+          y: {
+            min: 0, max: 100,
+            grid: { color: 'rgba(37,43,51,0.4)' },
+            ticks: {
+              color: '#8b949e', font: { size: 11 },
+              callback: v => v + ' 分'
+            }
+          }
+        }
+      }
+    });
+
+    document.getElementById('chartGateFallback').style.display = 'none';
+  } else if (n >= 2) {
+    // Fallback: inline SVG
+    renderGateTrendSVG(validScored);
+    document.getElementById('chartGateFallback').style.display = 'flex';
+  } else {
+    document.getElementById('chartGateFallback').style.display = 'flex';
+    document.getElementById('chartGateFallback').innerHTML = '<span>数据不足（至少需要 2 个已评分功能）</span>';
+  }
+
+  // ---- Chart 2: Degradation Mode Frequency ----
+  const degMap = {};
+  for (const { feature } of scored) {
+    for (const e of (feature.fallbackEvents || [])) {
+      const label = FALLBACK_LABELS[e.eventType] || e.eventType;
+      degMap[label] = (degMap[label] || 0) + 1;
+    }
+  }
+  const degEntries = Object.entries(degMap).sort((a,b) => b[1] - a[1]);
+
+  if (degEntries.length > 0 && typeof Chart !== 'undefined') {
+    const ctx2 = document.getElementById('chartDegradation').getContext('2d');
+    const barColors = degEntries.map(([label]) => {
+      for (const [type, l] of Object.entries(FALLBACK_LABELS)) {
+        if (l === label) {
+          const w = FALLBACK_WEIGHTS[type] || 1;
+          if (w >= 5) return 'rgba(248,81,73,0.7)';
+          if (w >= 3) return 'rgba(240,136,62,0.7)';
+          return 'rgba(210,153,34,0.7)';
+        }
+      }
+      return 'rgba(210,153,34,0.7)';
+    });
+    const borderColors = barColors.map(c => c.replace('0.7', '1'));
+
+    chartInstances.degradation = new Chart(ctx2, {
+      type: 'bar',
+      data: {
+        labels: degEntries.map(e => e[0]),
+        datasets: [{
+          label: '发生次数',
+          data: degEntries.map(e => e[1]),
+          backgroundColor: barColors,
+          borderColor: borderColors,
+          borderWidth: 1,
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1a1f2b',
+            borderColor: 'rgba(212,168,67,0.3)',
+            borderWidth: 1,
+            callbacks: {
+              label: ctx => `发生 ${ctx.parsed.x} 次`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(37,43,51,0.4)' },
+            ticks: { color: '#8b949e', font: { size: 10 }, stepSize: 1 }
+          },
+          y: {
+            grid: { display: false },
+            ticks: { color: '#8b949e', font: { size: 10 } }
+          }
+        }
+      }
+    });
+
+    document.getElementById('chartDegFallback').style.display = 'none';
+  } else if (degEntries.length > 0) {
+    document.getElementById('chartDegFallback').style.display = 'flex';
+    document.getElementById('chartDegFallback').innerHTML = renderDegSVG(degEntries);
+  } else {
+    document.getElementById('chartDegFallback').style.display = 'flex';
+    document.getElementById('chartDegFallback').innerHTML = '<span>✅ 无降级事件 — 工作流运行在最佳模式</span>';
+  }
+}
+
+function renderGateTrendSVG(scored) {
+  const w = 600, h = 240, pad = { top: 20, right: 20, bottom: 30, left: 50 };
+  const points = scored.map(s => s.scores.dimensions.gateIntegrity.score);
+  const maxV = 100, minV = 0;
+
+  const xScale = i => pad.left + (i / Math.max(points.length - 1, 1)) * (w - pad.left - pad.right);
+  const yScale = v => pad.top + (1 - (v - minV) / (maxV - minV)) * (h - pad.top - pad.bottom);
+
+  let pathData = '';
+  let dots = '';
+  for (let i = 0; i < points.length; i++) {
+    const x = xScale(i), y = yScale(points[i]);
+    pathData += (i === 0 ? 'M' : 'L') + ` ${x} ${y}`;
+    const c = points[i] >= 80 ? '#3fb950' : points[i] >= 60 ? '#d29922' : '#f85149';
+    dots += `<circle cx="${x}" cy="${y}" r="4" fill="${c}" stroke="#0d1117" stroke-width="2"/>`;
+    dots += `<text x="${x}" y="${y - 10}" text-anchor="middle" fill="#e6edf3" font-size="10" font-weight="600">${points[i]}</text>`;
+  }
+
+  document.getElementById('chartGateFallback').innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:240px;">
+      <line x1="${pad.left}" y1="${yScale(BASELINE.dimensions.gateIntegrity)}" x2="${w-pad.right}" y2="${yScale(BASELINE.dimensions.gateIntegrity)}" stroke="#8b949e" stroke-width="1" stroke-dasharray="6,3"/>
+      <text x="${w-pad.right}" y="${yScale(BASELINE.dimensions.gateIntegrity)-5}" text-anchor="end" fill="#8b949e" font-size="10">基线 ${BASELINE.dimensions.gateIntegrity}</text>
+      <path d="${pathData}" fill="none" stroke="#d4a843" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      ${dots}
+    </svg>`;
+}
+
+function renderDegSVG(entries) {
+  const maxCount = Math.max(...entries.map(e => e[1]));
+  const w = 500, h = Math.max(entries.length * 40 + 40, 200);
+  let bars = '';
+  entries.forEach(([label, count], i) => {
+    const barW = (count / maxCount) * (w - 200);
+    const y = 20 + i * 40;
+    bars += `
+      <text x="10" y="${y + 16}" fill="#8b949e" font-size="11" text-anchor="start">${label}</text>
+      <rect x="160" y="${y}" width="${barW}" height="22" rx="3" fill="#d4a843" opacity="0.7"/>
+      <text x="${165 + barW}" y="${y + 16}" fill="#e6edf3" font-size="11">${count}</text>`;
+  });
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:240px;">${bars}</svg>`;
+}
+
+// ============ Footer ============
+
+function updateFooter(scored) {
+  document.getElementById('footerBaseline').textContent = BASELINE.totalScore;
+  document.getElementById('footerLastScored').textContent = new Date().toLocaleDateString('zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+// ============ Export Report ============
+
+function exportReport() {
+  if (dashboardData.length === 0) { alert('无数据可导出'); return; }
+
+  const scored = dashboardData.map(f => ({ feature: f, scores: computeFullScore(f) }));
+  const experience = buildSampleExperience();
+
+  const report = {
+    exportedAt: new Date().toISOString(),
+    baseline: BASELINE,
+    featureCount: dashboardData.length,
+    features: scored.map(({ feature, scores }) => ({
+      featureId: feature.featureId,
+      humanReadableName: feature.humanReadableName || feature.featureId,
+      currentState: feature.currentState,
+      orchestrator: feature.orchestrator,
+      mode: feature.mode,
+      totalScore: scores.total,
+      dimensions: Object.fromEntries(
+        Object.entries(scores.dimensions).map(([k, v]) => [k, v.score])
+      ),
+      degradationCount: (feature.fallbackEvents || []).length,
+      humanDecisionCount: (feature.humanDecisions || []).length,
+      updatedAt: feature.updatedAt
+    })),
+    experienceSummary: {
+      lessonCount: experience.lessons.length,
+      patternCount: experience.patterns.length,
+      lessons: experience.lessons.map(l => ({ id: l.id, title: l.title, severity: l.severity })),
+      patterns: experience.patterns.map(p => ({ id: p.id, title: p.title, status: p.status }))
+    }
+  };
+
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `workflow-health-report-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ============ Init ============
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('data-source-label').textContent = '就绪 · 点击"加载示例"开始';
+  showEmptyState();
+});
+</script>
+</body>
+</html>
