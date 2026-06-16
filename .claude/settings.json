@@ -1,9 +1,15 @@
 {
   "//": "──────────────────────────────────────────────────────────────────",
-  "//_1": " Claude Code 确定性门禁层（Layer 2）配置文件",
+  "//_1": " Claude Code 确定性门禁层（Layer 2）配置文件 — 加固版 v2.0",
   "//_2": " 基于 .claude/settings.example.json 扩展，激活实际约束。",
-  "//_3": " 与 workflow/feature-state.schema.json + workflow/scripts/gate-check.sh 协同工作。",
+  "//_3": " 与 workflow/feature-state.schema.json + workflow/scripts/gate-check.sh + workflow/scripts/dispatch.sh 协同工作。",
   "//_4": "──────────────────────────────────────────────────────────────────",
+  "//_5": " v2.0 加固项：",
+  "//_6": "   1. PreToolUse — --enforce 硬阻断（代码文件写入前强制门禁检查）",
+  "//_7": "   2. PostToolUse — 制品写入后自动 gate-check --json 更新门禁状态",
+  "//_8": "   3. SessionStart — 启动时调用 dispatch.sh 注入路由指令",
+  "//_9": "   4. commands — /gate-status 和 /dispatch 自定义斜杠命令",
+  "//_10": "   5. permissions — workflow/scripts/*.sh 执行权限加固",
 
   "workflow": {
     "primaryInstructions": [
@@ -14,17 +20,19 @@
     "featureArtifacts": "workflow/features/<feature-id>/",
     "fallbackMatrix": "workflow/fallback-matrix.md",
     "featureStateSchema": "workflow/feature-state.schema.json",
-    "gateCheckScript": "workflow/scripts/gate-check.sh"
+    "gateCheckScript": "workflow/scripts/gate-check.sh",
+    "dispatchScript": "workflow/scripts/dispatch.sh"
   },
 
-  "//_hooks": "─────────────────── Hook 定义 ───────────────────",
+  "//_hooks": "─────────────────── Hook 定义（加固版）───────────────────",
   "//_hooks_note": "Hook 机制是确定性门禁层的实时拦截层。每个 hook 在对应事件触发时运行 shell 命令；命令返回非零退出码则阻止操作。",
+  "//_hooks_events": "Claude Code 支持的 hook 事件: PreToolUse, PostToolUse, SessionStart, Stop, Notification",
 
   "hooks": {
-    "//_PreToolUse": "工具调用前拦截。用于在 Agent 越界操作（如跳过门禁直接写代码）时阻断。",
+    "//_PreToolUse": "工具调用前拦截 — 加固版：新增 --enforce 硬阻断 + 保留 feature-state.json 写保护",
     "PreToolUse": [
       {
-        "//": "门禁写保护：拦截对 feature-state.json 的手动 currentState 跳跃。",
+        "//": "【加固】门禁写保护：拦截对 feature-state.json 的手动 currentState 跳跃。",
         "//_note": "只允许 gate-check.sh 通过的环境变量标记来放行合法的状态更新。",
         "matcher": "Write|Edit",
         "matcher_description": "匹配所有文件写入和编辑操作。",
@@ -32,32 +40,53 @@
         "timeout": 5000
       },
       {
-        "//": "实现前门禁检查：在 Write/Edit 代码文件前，验证当前功能的 Gate 1-3 已通过。",
-        "//_note": "仅对 workflow/features/ 下有活跃功能的项目生效。不阻断 workflow/ 目录自身的写入。",
+        "//": "【加固 v2.0】代码文件写入前 --enforce 硬阻断门禁检查。",
+        "//_note": "对 .ts/.js/.py 等代码文件，调用 gate-check.sh --enforce。若返回 blocked=true 则阻止写入。",
+        "//_note_2": "根据 feature-state.json 中的 currentState 动态决定目标门禁：S0-S4→G3, S5→G4, S6→G5, S7→G6, S8-S9→G7。",
+        "//_note_3": "不阻断 workflow/ 目录下的文件（制品文件不受此限制）。",
         "matcher": "Write|Edit",
-        "matcher_description": "匹配所有文件写入操作。",
-        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -qE \"\\.(ts|tsx|js|jsx|py|go|rs|java|rb)$\" && ! echo \"$FILE\" | grep -q \"workflow/\"; then if [ -f workflow/scripts/gate-check.sh ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); if [ -n \"$FEATURE\" ]; then bash workflow/scripts/gate-check.sh \"$FEATURE\" --min-gate gate-3 > /dev/null 2>&1; if [ $? -ne 0 ]; then echo \"[GATE-LAYER] WARNING: Gate 1-3 未全部通过。实现前请确认规格已就绪。\"; fi; fi; fi; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
-        "timeout": 10000,
-        "onFailure": "warn"
+        "matcher_description": "匹配所有文件写入操作——仅对代码文件执行 --enforce 硬阻断。",
+        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -qE \"\\.(ts|tsx|js|jsx|py|go|rs|java|rb|css|scss|html|vue|svelte)$\" && ! echo \"$FILE\" | grep -q \"workflow/\"; then FEATURE=\"\"; if echo \"$FILE\" | grep -q \"workflow/features/\"; then FEATURE=$(echo \"$FILE\" | sed \"s|.*workflow/features/||\" | cut -d/ -f1); fi; if [ -z \"$FEATURE\" ] && [ -d workflow/features ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); fi; if [ -n \"$FEATURE\" ] && [ -f \"workflow/scripts/gate-check.sh\" ]; then STATE_FILE=\"workflow/features/$FEATURE/feature-state.json\"; TARGET_GATE=\"G4\"; if [ -f \"$STATE_FILE\" ]; then STATE=$(grep \"\\\"currentState\\\"\" \"$STATE_FILE\" 2>/dev/null | head -1 | sed \"s/.*\\\"currentState\\\"[[:space:]]*:[[:space:]]*\\\"\\([^\\\"]*\\)\\\".*/\\1/\"); case \"$STATE\" in S0|S1|S2|S3|S4) TARGET_GATE=\"G3\" ;; S5) TARGET_GATE=\"G4\" ;; S6) TARGET_GATE=\"G5\" ;; S7) TARGET_GATE=\"G6\" ;; S8|S9) TARGET_GATE=\"G7\" ;; esac; fi; RESULT=$(bash workflow/scripts/gate-check.sh \"$FEATURE\" \"$TARGET_GATE\" --enforce 2>&1); RC=$?; if [ $RC -ne 0 ]; then if echo \"$RESULT\" | grep -q \"\\\"blocked\\\":[[:space:]]*true\"; then echo \"[GATE-LAYER] ===========================================\"; echo \"[GATE-LAYER] BLOCKED: 门禁 $TARGET_GATE 未通过，代码写入被阻止\"; echo \"[GATE-LAYER] 功能=$FEATURE 目标门禁=$TARGET_GATE\"; echo \"$RESULT\"; echo \"[GATE-LAYER] 请先通过门禁检查，或运行 gate-check.sh 查看详情\"; echo \"[GATE-LAYER] ===========================================\"; exit 1; fi; else echo \"[GATE-LAYER] 门禁 $TARGET_GATE 已通过 — 允许写入: $(basename \"$FILE\")\"; fi; fi; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
+        "timeout": 15000,
+        "onFailure": "block"
       }
     ],
 
-    "//_PostToolUse": "工具调用后检查。用于在关键操作后验证状态一致性。",
+    "//_PostToolUse": "工具调用后检查 — 加固版：新增制品文件写入后自动 gate-check --json 状态更新",
     "PostToolUse": [
       {
         "//": "状态文件写入后自动运行 gate-check 校验。",
         "matcher": "Write|Edit",
         "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -q \"feature-state.json\"; then echo \"[GATE-LAYER] feature-state.json 已更新。正在运行 gate-check...\"; FEATURE=$(basename $(dirname \"$FILE\")); bash workflow/scripts/gate-check.sh \"$FEATURE\" 2>&1 || echo \"[GATE-LAYER] gate-check 返回非零，请检查缺失项。\"; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
         "timeout": 15000
+      },
+      {
+        "//": "【加固 v2.0】制品文件写入后自动 gate-check --json 并显示更新后的门禁状态。",
+        "//_note": "仅对 workflow/features/ 下的已知制品文件触发（提案/报告/验证/ADR/回顾/审查）。",
+        "//_note_2": "输出 JSON 摘要让 Agent 立即感知门禁通过/失败变化，无需手动运行 gate-check。",
+        "matcher": "Write|Edit",
+        "matcher_description": "匹配所有文件写入——仅对 workflow/features/ 下的制品文件触发门禁状态刷新。",
+        "command": "bash -c 'FILE=\"$1\"; if echo \"$FILE\" | grep -q \"workflow/features/\"; then BASENAME=$(basename \"$FILE\"); case \"$BASENAME\" in 01-openspec-proposal.md|02-grill-me-report.md|03-task-skill-map.md|04-implementation-plan.md|05-verification-log.md|06-adr.md|07-task-retro.md|codex-review.md|claude-review.md|feature-state.json) FEATURE=$(echo \"$FILE\" | sed \"s|.*workflow/features/||\" | cut -d/ -f1); if [ -n \"$FEATURE\" ] && [ -f \"workflow/scripts/gate-check.sh\" ]; then echo \"[GATE-LAYER] 制品已更新: $BASENAME (功能: $FEATURE)\"; RESULT=$(bash workflow/scripts/gate-check.sh \"$FEATURE\" --json 2>/dev/null); if [ -n \"$RESULT\" ]; then DECISION=$(echo \"$RESULT\" | grep -o \"\\\"decision\\\":\\\"[^\\\"]*\\\"\" | head -1 | sed \"s/\\\"decision\\\":\\\"\\([^\\\"]*\\)\\\"/\\1/\"); PASSED=$(echo \"$RESULT\" | grep -o \"\\\"passed\\\":[0-9]*\" | head -1 | sed \"s/\\\"passed\\\":\\([0-9]*\\)/\\1/\"); FAILED=$(echo \"$RESULT\" | grep -o \"\\\"failed\\\":[0-9]*\" | head -1 | sed \"s/\\\"failed\\\":\\([0-9]*\\)/\\1/\"); echo \"[GATE-LAYER] 门禁决策: $DECISION | 通过: ${PASSED:-0} | 失败: ${FAILED:-0}\"; if [ \"$DECISION\" = \"block\" ]; then echo \"[GATE-LAYER] WARNING: 门禁存在失败项，请检查并修复后重新运行 gate-check.sh\"; fi; fi; fi ;; esac; fi' -- \"$CLAUDE_TOOL_PARAMETER_FILE_PATH\"",
+        "timeout": 15000,
+        "onFailure": "warn"
       }
     ],
 
-    "//_SessionStart": "会话启动时自动校验当前项目状态。",
+    "//_SessionStart": "会话启动时自动校验当前项目状态 — 加固版：新增 dispatch.sh 路由注入",
     "SessionStart": [
       {
         "//": "启动时检查所有功能的状态一致性。",
         "matcher": "",
         "command": "bash -c 'if [ -f workflow/scripts/gate-check.sh ]; then echo \"[GATE-LAYER] 会话启动：扫描活跃功能...\"; for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); echo \"  → 检查 $FEATURE...\"; bash workflow/scripts/gate-check.sh \"$FEATURE\" --quiet 2>&1 || echo \"  ⚠ $FEATURE: gate-check 未通过\"; fi; done; echo \"[GATE-LAYER] 扫描完成。\"; fi'",
+        "timeout": 30000
+      },
+      {
+        "//": "【加固 v2.0】启动时调用 dispatch.sh 注入路由指令到会话上下文。",
+        "//_note": "对每个非 S9 归档的活跃功能运行 dispatch.sh --json，提取 nextAction 和 humanCheckpoint。",
+        "//_note_2": "若 dispatch.sh 报告需要人类 Checkpoint，在 stdout 醒目显示 [! HUMAN CHECKPOINT NEEDED !]。",
+        "//_note_3": "Agent 应直接执行 dispatch 输出的路由指令，不再自行阅读 dispatcher.md 后判断。",
+        "matcher": "",
+        "command": "bash -c 'if [ -f workflow/scripts/dispatch.sh ]; then echo \"\"; echo \"====================[ DISPATCH 路由指令 ]====================\"; FOUND_ACTIVE=false; for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); STATE=$(grep \"\\\"currentState\\\"\" \"$d/feature-state.json\" 2>/dev/null | head -1 | sed \"s/.*\\\"currentState\\\"[[:space:]]*:[[:space:]]*\\\"\\([^\\\"]*\\)\\\".*/\\1/\"); if [ \"$STATE\" != \"S9\" ] && [ -n \"$STATE\" ]; then FOUND_ACTIVE=true; OUTPUT=$(bash workflow/scripts/dispatch.sh \"$FEATURE\" --json 2>&1); echo \"\"; echo \"--- 功能: $FEATURE (状态: $STATE) ---\"; ACTION=$(echo \"$OUTPUT\" | grep -o \"\\\"action\\\":\\\"[^\\\"]*\\\"\" | head -1 | sed \"s/\\\"action\\\":\\\"\\([^\\\"]*\\)\\\"/\\1/\"); ROLE=$(echo \"$OUTPUT\" | grep -o \"\\\"sessionRole\\\":\\\"[^\\\"]*\\\"\" | head -1 | sed \"s/\\\"sessionRole\\\":\\\"\\([^\\\"]*\\)\\\"/\\1/\"); echo \"  会话角色: ${ROLE:-unknown} | 下一步动作: ${ACTION:-unknown}\"; HAS_CP=$(echo \"$OUTPUT\" | grep -o \"\\\"trigger\\\":\\\"[^\\\"]*\\\"\" | grep -v \"none\" | head -1 | sed \"s/\\\"trigger\\\":\\\"\\([^\\\"]*\\)\\\"/\\1/\"); if [ -n \"$HAS_CP\" ]; then echo \"\"; echo \"  ╔══════════════════════════════════════════╗\"; echo \"  ║  [!] 需要人类 Checkpoint               ║\"; echo \"  ║  触发条件: $HAS_CP\"; printf \"  ║  %-40s ║\\n\" \"请使用 /dispatch $FEATURE 查看详情\"; echo \"  ╚══════════════════════════════════════════╝\"; fi; fi; fi; done; if [ \"$FOUND_ACTIVE\" = false ]; then echo \"  没有活跃功能（所有功能均已归档至 S9）。\"; fi; echo \"==============================================================\"; echo \"\"; fi'",
         "timeout": 30000
       }
     ],
@@ -67,14 +96,67 @@
       {
         "//": "会话结束时提醒未解决的门禁问题。",
         "matcher": "",
-        "command": "bash -c 'if [ -f workflow/scripts/gate-check.sh ]; then for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); STATE=$(python3 -c \"import json; d=json.load(open(\\\"$d/feature-state.json\\\")); print(d.get(\\\"currentState\\\",\\\"?\\\"))\" 2>/dev/null || echo \"?\"); if [ \"$STATE\" != \"S9\" ] && [ \"$STATE\" != \"?\" ]; then echo \"[GATE-LAYER] 提醒: 功能 '$FEATURE' 仍在 $STATE 状态，未归档。\"; fi; fi; done; fi'",
+        "command": "bash -c 'if [ -f workflow/scripts/gate-check.sh ]; then for d in workflow/features/*/; do if [ -f \"$d/feature-state.json\" ]; then FEATURE=$(basename \"$d\"); STATE=$(python3 -c \"import json; d=json.load(open(\\\"$d/feature-state.json\\\")); print(d.get(\\\"currentState\\\",\\\"?\\\"))\" 2>/dev/null || echo \"?\"); if [ \"$STATE\" != \"S9\" ] && [ \"$STATE\" != \"?\" ]; then echo \"[GATE-LAYER] 提醒: 功能 $FEATURE 仍在 $STATE 状态，未归档。\"; fi; fi; done; fi'",
         "timeout": 10000
+      }
+    ],
+
+    "//_Notification": "─────────────────── Notification Hook ───────────────────",
+    "//_Notification_note": "Notification hook 用于响应外部系统通知。以下 hook 尝试拦截 gate-status 和 dispatch 关键字通知，作为 /gate-status 和 /dispatch 斜杠命令的补充触发方式。",
+    "//_Notification_warning": "需要 Claude Code >= 1.0.0 确认 Notification hook 支持。若不可用，请使用下方 commands 节定义的斜杠命令。",
+    "Notification": [
+      {
+        "//": "【加固 v2.0】响应 gate-status 通知，运行门禁检查。",
+        "//_note": "当收到包含 'gate-status <feature-id>' 的通知时，自动运行 gate-check.sh --json。",
+        "//_note_2": "需要 Claude Code >= 1.0.0 确认 Notification hook matcher 对通知内容的 glob 匹配行为。",
+        "matcher": "gate-status",
+        "matcher_description": "匹配包含 gate-status 的通知内容。",
+        "command": "bash -c 'NOTIF=\"$1\"; FEATURE=$(echo \"$NOTIF\" | sed \"s/.*gate-status[[:space:]]*//\" | awk \"{print \\$1}\"); if [ -z \"$FEATURE\" ] && [ -d workflow/features ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); fi; if [ -n \"$FEATURE\" ] && [ -f \"workflow/scripts/gate-check.sh\" ]; then echo \"[GATE-LAYER] 手动触发门禁检查: $FEATURE\"; bash workflow/scripts/gate-check.sh \"$FEATURE\" --json 2>&1; fi' -- \"$CLAUDE_NOTIFICATION_TEXT\"",
+        "timeout": 15000
+      },
+      {
+        "//": "【加固 v2.0】响应 dispatch 通知，运行路由调度。",
+        "//_note": "当收到包含 'dispatch <feature-id>' 的通知时，自动运行 dispatch.sh --json。",
+        "//_note_2": "需要 Claude Code >= 1.0.0 确认 Notification hook matcher 对通知内容的 glob 匹配行为。",
+        "matcher": "dispatch",
+        "matcher_description": "匹配包含 dispatch 的通知内容。",
+        "command": "bash -c 'NOTIF=\"$1\"; FEATURE=$(echo \"$NOTIF\" | sed \"s/.*dispatch[[:space:]]*//\" | awk \"{print \\$1}\"); if [ -z \"$FEATURE\" ] && [ -d workflow/features ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); fi; if [ -n \"$FEATURE\" ] && [ -f \"workflow/scripts/dispatch.sh\" ]; then echo \"[GATE-LAYER] 手动触发路由调度: $FEATURE\"; bash workflow/scripts/dispatch.sh \"$FEATURE\" --json 2>&1; fi' -- \"$CLAUDE_NOTIFICATION_TEXT\"",
+        "timeout": 15000
       }
     ]
   },
 
-  "//_permissions": "─────────────────── 权限配置 ───────────────────",
+  "//_commands": "─────────────────── 自定义斜杠命令 ───────────────────",
+  "//_commands_note": "自定义斜杠命令让用户通过 /gate-status <feature-id> 和 /dispatch <feature-id> 手动触发门禁检查和调度。",
+  "//_commands_warning": "需要 Claude Code >= 1.0.0 确认 commands 配置支持。若当前版本不支持 commands 字段，Agent 可降级使用 Bash 直接调用脚本：bash workflow/scripts/gate-check.sh <feature-id> 或 bash workflow/scripts/dispatch.sh <feature-id>。",
+  "commands": {
+    "gate-status": {
+      "description": "检查指定功能的所有门禁状态（G1-G7），输出 JSON 结果。",
+      "arguments": [
+        {
+          "name": "feature-id",
+          "description": "功能目录名（位于 workflow/features/<feature-id>/）。留空则检查最近修改的功能。",
+          "required": false
+        }
+      ],
+      "command": "if [ -z \"${ARGUMENTS}\" ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); else FEATURE=\"${ARGUMENTS}\"; fi; if [ -n \"$FEATURE\" ]; then bash workflow/scripts/gate-check.sh \"$FEATURE\" --json; else echo \"错误: 未找到活跃功能。请指定 feature-id。\"; fi"
+    },
+    "dispatch": {
+      "description": "运行路由调度器，查看当前功能的下一步路由指令和人类 Checkpoint 状态。",
+      "arguments": [
+        {
+          "name": "feature-id",
+          "description": "功能目录名（位于 workflow/features/<feature-id>/）。留空则检查最近修改的功能。",
+          "required": false
+        }
+      ],
+      "command": "if [ -z \"${ARGUMENTS}\" ]; then FEATURE=$(ls -t workflow/features/ 2>/dev/null | head -1); else FEATURE=\"${ARGUMENTS}\"; fi; if [ -n \"$FEATURE\" ]; then bash workflow/scripts/dispatch.sh \"$FEATURE\" --json; else echo \"错误: 未找到活跃功能。请指定 feature-id。\"; fi"
+    }
+  },
+
+  "//_permissions": "─────────────────── 权限配置（加固版）───────────────────",
   "//_permissions_note": "权限是门禁层的第二道防线。即使 Agent 模型输出越界指令，权限配置也会拦截。",
+  "//_permissions_v2": "v2.0 加固：新增 workflow/scripts/*.sh 执行权限 allow，确保门禁脚本可被 Agent 调用。",
 
   "permissions": {
     "//_allow": "显式允许的操作。",
@@ -90,13 +172,31 @@
       "Bash(wc:*)",
       "Bash(python3:*)",
       "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(date:*)",
+      "Bash(printf:*)",
       "WebSearch",
       "WebFetch",
       "Skill(*)",
       "TaskCreate",
       "TaskUpdate",
       "TaskGet",
-      "TaskList"
+      "TaskList",
+      "Bash(workflow/scripts/gate-check.sh:*)",
+      "Bash(workflow/scripts/dispatch.sh:*)",
+      "Bash(bash workflow/scripts/gate-check.sh:*)",
+      "Bash(bash workflow/scripts/dispatch.sh:*)",
+      "Bash(mkdir:*)",
+      "Bash(basename:*)",
+      "Bash(dirname:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(cut:*)",
+      "Bash(tr:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)"
     ],
 
     "//_ask": "需要每次询问人类的操作。",
@@ -158,6 +258,6 @@
   "//_systemPrompt": "─────────────────── 系统提示 ───────────────────",
   "systemPrompt": {
     "//_append": "追加到默认系统提示的内容（注入确定性门禁层意识）。",
-    "append": "你运行在确定性门禁层（Layer 2）环境中。每次状态转换前必须调用 workflow/scripts/gate-check.sh 验证。文件系统是唯一真相源——不相信记忆，只相信磁盘上的产物文件。"
+    "append": "你运行在确定性门禁层（Layer 2）环境中。每次状态转换前必须调用 workflow/scripts/gate-check.sh 验证。文件系统是唯一真相源——不相信记忆，只相信磁盘上的产物文件。路由指令由 dispatch.sh 输出——直接执行其 JSON 输出中的 nextAction，不要自行阅读 dispatcher.md 后判断。"
   }
 }

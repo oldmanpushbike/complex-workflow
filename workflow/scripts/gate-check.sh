@@ -10,17 +10,45 @@
 #   5. 输出格式：每门禁一个 JSON 对象 {gate, status, missing, warnings}
 #
 # 用法：
-#   bash workflow/scripts/gate-check.sh <feature-id> [target-gate]
+#   bash workflow/scripts/gate-check.sh <feature-id> [target-gate] [flags]
 #
 # 参数：
-#   feature-id    必需。功能目录名（位于 workflow/features/<feature-id>/）
-#   target-gate   可选。目标门禁编号 G1-G7，或 "all"（默认检查全部已到达门禁）
-#                 也接受 gate-1..gate-7 或纯数字 1..7
+#   feature-id      必需。功能目录名（位于 workflow/features/<feature-id>/）
+#   target-gate     可选。目标门禁编号 G1-G7，或 "all"（默认检查全部已到达门禁）
+#                   也接受 gate-1..gate-7 或纯数字 1..7
+#   --enforce       强制执行模式：若 fail，输出阻止指令 JSON 并退出非零
+#   --schema-only   仅校验 feature-state.json 结构，不检查门禁产物
+#   --json          增强 JSON 输出，添加 machine-readable 字段供 dispatch.sh 解析
 #
 # 退出码：
-#   0 — 所有检查通过
-#   1 — 存在失败项
+#   0 — 所有检查通过 / --schema-only 校验通过
+#   1 — 存在失败项 / --enforce 阻止
 #   2 — 脚本自身错误（如参数错误、目录不存在）
+#
+# ============================================================================
+# dispatch.sh 调用说明：
+# ============================================================================
+# dispatch.sh 通过两种方式调用本脚本：
+#
+# 1. 普通检查（状态转换前）：
+#      result=$(bash workflow/scripts/gate-check.sh <feature-id> --json)
+#      decision=$(echo "$result" | jq -r '.decision')
+#      if [ "$decision" = "proceed" ]; then
+#          # 允许状态转换：更新 feature-state.json，推进到下一状态
+#      else
+#          # 阻止转换：failedGate / failedReason 指明原因
+#      fi
+#
+# 2. 强制执行（CI / pre-commit hook）：
+#      bash workflow/scripts/gate-check.sh <feature-id> --enforce
+#      if [ $? -ne 0 ]; then
+#          # 解析 JSON 获取 rollbackTo / requiredAction
+#          # 阻止 commit 或 CI pipeline 继续
+#      fi
+#
+# 3. Schema 校验：
+#      bash workflow/scripts/gate-check.sh <feature-id> --schema-only
+#      # 输出 { "schemaValid": true/false, "errors": [...] }
 # ============================================================================
 
 set -o pipefail
@@ -28,6 +56,10 @@ set -o pipefail
 # ---- 路径配置 ---------------------------------------------------------------
 FEATURES_DIR="${WORKFLOW_FEATURES_DIR:-workflow/features}"
 SCRIPT_NAME="${0##*/}"
+
+# ---- 版本信息（供 dispatch.sh 兼容性检查） -----------------------------------
+SCRIPT_VERSION="2.0.0"
+OUTPUT_FORMAT="gate-check-v2"
 
 # ---- 工具检测 ---------------------------------------------------------------
 HAS_JQ=false
@@ -40,6 +72,43 @@ EXIT_CODE=0
 RESULTS_JSON=""          # 累积每个门禁的 JSON 对象
 RESULT_COUNT=0
 WARNINGS_GLOBAL=""       # 全局警告（不影响 pass/fail）
+FIRST_FAILED_GATE=""     # 第一个失败的门禁编号（供 --enforce / --json 使用）
+FIRST_FAILED_REASON=""   # 第一个失败的原因描述
+
+# ---- 模式标志 ---------------------------------------------------------------
+ENFORCE_MODE=false
+SCHEMA_ONLY_MODE=false
+JSON_MODE=false
+
+# ---- 门禁 → 回退状态映射（供 --enforce 使用）-------------------------------
+declare -A GATE_ROLLBACK
+GATE_ROLLBACK["G1"]="S2"
+GATE_ROLLBACK["G2"]="S3"
+GATE_ROLLBACK["G3"]="S4"
+GATE_ROLLBACK["G4"]="S5"
+GATE_ROLLBACK["G5"]="S6"
+GATE_ROLLBACK["G6"]="S7"
+GATE_ROLLBACK["G7"]="S8"
+
+# ---- 门禁 → 失败原因描述（供 --enforce / --json 使用）-----------------------
+declare -A GATE_FAIL_REASON
+GATE_FAIL_REASON["G1"]="Gate 1 失败: 01-openspec-proposal.md 缺失或内容不完整"
+GATE_FAIL_REASON["G2"]="Gate 2 失败: 02-grill-me-report.md 缺失或风险未记录"
+GATE_FAIL_REASON["G3"]="Gate 3 失败: 03-task-skill-map.md 缺失或任务未路由"
+GATE_FAIL_REASON["G4"]="Gate 4 失败: 04-implementation-plan.md 缺失"
+GATE_FAIL_REASON["G5"]="Gate 5 失败: reviews/ 目录缺失或审查报告不完整"
+GATE_FAIL_REASON["G6"]="Gate 6 失败: 05-verification-log.md 缺失或验证不完整"
+GATE_FAIL_REASON["G7"]="Gate 7 失败: 06-adr.md 或 07-task-retro.md 缺失"
+
+# ---- 门禁 → 补救动作描述（供 --enforce 使用）--------------------------------
+declare -A GATE_ACTION
+GATE_ACTION["G1"]="回退到 S2，编写完整的 OpenSpec 提案后重试"
+GATE_ACTION["G2"]="回退到 S3，完成 grill-me 风险审查后重试"
+GATE_ACTION["G3"]="回退到 S4，填写任务-技能映射表后重试"
+GATE_ACTION["G4"]="回退到 S5，补充 implementation-plan.md 后重试"
+GATE_ACTION["G5"]="回退到 S6，完成审查报告后重试"
+GATE_ACTION["G6"]="回退到 S7，完成验证并记录结果后重试"
+GATE_ACTION["G7"]="回退到 S8，完成 ADR 和任务回顾后重试"
 
 # ---- 辅助函数 ---------------------------------------------------------------
 
@@ -106,6 +175,17 @@ append_gate_result() {
     RESULTS_JSON+="
     $gate_obj"
     RESULT_COUNT=$((RESULT_COUNT + 1))
+
+    # 追踪第一个失败的门禁（供 --enforce / --json 使用）
+    if [ "$status" = "fail" ] && [ -z "$FIRST_FAILED_GATE" ]; then
+        FIRST_FAILED_GATE="$gate"
+        # 从 missing 数组提取第一条作为原因缩略
+        if [ ${#missing[@]} -gt 0 ]; then
+            FIRST_FAILED_REASON="${GATE_FAIL_REASON[$gate]}"
+        else
+            FIRST_FAILED_REASON="${GATE_FAIL_REASON[$gate]}"
+        fi
+    fi
 }
 
 # 标准化门禁编号：将各种输入格式统一为 "G1".."G7"
@@ -220,6 +300,10 @@ read_feature_mode() {
 }
 
 # ---- 可选：feature-state.json 结构校验（使用 jq 或 grep 降级）--------------
+#
+# 说明：本函数用于普通门禁检查中的 schema 旁路警告。
+#       --schema-only 模式使用独立的 schema_only_check() 函数，
+#       输出格式为 { "schemaValid": true/false, "errors": [...] }。
 
 validate_state_json() {
     local state_file="$1"
@@ -311,6 +395,229 @@ validate_state_json() {
         return 1
     fi
     return 0
+}
+
+# ---- --schema-only：独立 Schema 校验函数 ------------------------------------
+#
+# 校验 feature-state.json 是否符合 feature-state.schema.json。
+# 使用 jq（若可用）或 grep 降级。
+# 输出格式：
+#   { "schemaValid": true/false, "errors": ["err1","err2",...] }
+# 退出码：0 = 校验通过，1 = 存在错误，2 = 文件不存在
+
+schema_only_check() {
+    local state_file="$1"
+    local errors=()
+    local schema_valid=true
+
+    # 文件不存在即失败
+    if [ ! -f "$state_file" ]; then
+        cat <<EOF
+{
+  "schemaValid": false,
+  "errors": ["feature-state.json 不存在"],
+  "checkedFields": ["featureId","currentState","orchestrator","mode","gates","stateHistory"],
+  "gatesExpected": 7,
+  "validStates": ["S0","S1","S2","S3","S4","S5","S6","S7","S8","S9"],
+  "validOrchestrators": ["codex","claude"],
+  "validModes": ["dual-agent","single-agent"]
+}
+EOF
+        return 2
+    fi
+
+    # 解析器选择
+    if [ "$HAS_JQ" = true ]; then
+        # ---- jq 路径：完整结构校验 ----
+
+        # JSON 语法校验
+        if ! jq empty "$state_file" 2>/dev/null; then
+            errors+=("JSON 语法错误：文件无法被 jq 解析")
+            schema_valid=false
+        else
+            # 1) 检查 required 顶层字段
+            local required_fields=("featureId" "currentState" "orchestrator" "mode" "gates" "stateHistory")
+            for field in "${required_fields[@]}"; do
+                if ! jq -e ".$field" "$state_file" >/dev/null 2>&1; then
+                    errors+=("缺少必需字段: '$field'")
+                    schema_valid=false
+                fi
+            done
+
+            # 2) 检查 currentState 枚举值
+            local state
+            state=$(jq -r '.currentState // ""' "$state_file" 2>/dev/null)
+            if [ -n "$state" ]; then
+                case "$state" in
+                    S0|S1|S2|S3|S4|S5|S6|S7|S8|S9) : ;;
+                    *) errors+=("currentState 非法枚举值: '$state'（预期 S0-S9）")
+                       schema_valid=false ;;
+                esac
+            fi
+
+            # 3) 检查 orchestrator 枚举值
+            local orch
+            orch=$(jq -r '.orchestrator // ""' "$state_file" 2>/dev/null)
+            if [ -n "$orch" ]; then
+                case "$orch" in
+                    codex|claude) : ;;
+                    *) errors+=("orchestrator 非法枚举值: '$orch'（预期 codex 或 claude）")
+                       schema_valid=false ;;
+                esac
+            fi
+
+            # 4) 检查 mode 枚举值
+            local mode
+            mode=$(jq -r '.mode // ""' "$state_file" 2>/dev/null)
+            if [ -n "$mode" ]; then
+                case "$mode" in
+                    dual-agent|single-agent) : ;;
+                    *) errors+=("mode 非法枚举值: '$mode'（预期 dual-agent 或 single-agent）")
+                       schema_valid=false ;;
+                esac
+            fi
+
+            # 5) 检查 gates 数组长度 == 7
+            local gate_count
+            gate_count=$(jq '.gates | length' "$state_file" 2>/dev/null || echo "0")
+            if [ "${gate_count:-0}" -ne 7 ]; then
+                errors+=("gates 数组长度为 $gate_count，预期 7")
+                schema_valid=false
+            fi
+
+            # 6) 检查 stateHistory 是否为数组
+            local hist_type
+            hist_type=$(jq -r '(.stateHistory | type) // "null"' "$state_file" 2>/dev/null)
+            if [ "$hist_type" != "array" ]; then
+                errors+=("stateHistory 应为数组类型，实际为 $hist_type")
+                schema_valid=false
+            fi
+        fi
+    else
+        # ---- 降级路径：grep 基础校验 ----
+        # 检查 JSON 是否以 { 开头
+        local first_char
+        first_char=$(head -c 1 "$state_file" 2>/dev/null | tr -d '[:space:]')
+        if [ "$first_char" != "{" ]; then
+            errors+=("文件不以 JSON 对象开头，可能非合法 JSON")
+            schema_valid=false
+        fi
+
+        # 检查 required 字段
+        local required_fields=("featureId" "currentState" "orchestrator" "mode" "gates" "stateHistory")
+        for field in "${required_fields[@]}"; do
+            if ! grep -q "\"$field\"" "$state_file" 2>/dev/null; then
+                errors+=("缺少必需字段: '$field'（grep 降级校验，精度有限）")
+                schema_valid=false
+            fi
+        done
+
+        # 检查 currentState 枚举（grep 提取后校验）
+        local state
+        state=$(grep '"currentState"' "$state_file" 2>/dev/null \
+            | head -1 \
+            | sed 's/.*"currentState"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -n "$state" ]; then
+            case "$state" in
+                S0|S1|S2|S3|S4|S5|S6|S7|S8|S9) : ;;
+                *) errors+=("currentState 非法值: '$state'（预期 S0-S9）")
+                   schema_valid=false ;;
+            esac
+        fi
+
+        # 检查 gates 数组长度（grep 计数）
+        local gate_count
+        gate_count=$(grep -c '"gate"' "$state_file" 2>/dev/null || echo "0")
+        gate_count=$(echo "$gate_count" | tr -d '[:space:]')
+        if [ "${gate_count:-0}" -ne 7 ] && [ "${gate_count:-0}" -ne 0 ]; then
+            errors+=("gates 条目数约为 $gate_count，预期 7（grep 降级校验，精度有限）")
+            schema_valid=false
+        fi
+
+        # jq 不可用时标注
+        errors+=("警告: jq 不可用，已降级为 grep 基础校验（精度有限）")
+    fi
+
+    # 输出结果
+    local errors_json
+    errors_json=$(json_str_array "${errors[@]}")
+
+    cat <<EOF
+{
+  "schemaValid": $schema_valid,
+  "errors": $errors_json,
+  "checkedFields": ["featureId","currentState","orchestrator","mode","gates","stateHistory"],
+  "gatesExpected": 7,
+  "validStates": ["S0","S1","S2","S3","S4","S5","S6","S7","S8","S9"],
+  "validOrchestrators": ["codex","claude"],
+  "validModes": ["dual-agent","single-agent"],
+  "jqAvailable": $HAS_JQ
+}
+EOF
+
+    if [ "$schema_valid" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ---- --enforce：输出阻止指令 JSON --------------------------------------------
+#
+# 当门禁检查有失败项时，输出阻止指令供 CI / pre-commit hook 消费。
+# 退出码：1（阻止）
+
+output_enforce_blocked() {
+    local failed_gate="$1"
+    local total_passed="$2"
+    local total_failed="$3"
+    local reason="${GATE_FAIL_REASON[$failed_gate]}"
+    local action="${GATE_ACTION[$failed_gate]}"
+    local rollback="${GATE_ROLLBACK[$failed_gate]}"
+
+    cat <<EOF
+{
+  "enforce": true,
+  "blocked": true,
+  "reason": "$reason",
+  "requiredAction": "$action",
+  "rollbackTo": "$rollback",
+  "humanCheckpointTriggered": false,
+  "failedGate": "$failed_gate",
+  "gateSummary": {
+    "checkAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)",
+    "featureId": "$FEATURE_ID",
+    "targetGate": "$TARGET_GATE",
+    "totalChecked": $RESULT_COUNT,
+    "passed": $total_passed,
+    "failed": $total_failed
+  }
+}
+EOF
+    exit 1
+}
+
+# 当 --enforce 模式下所有门禁通过时输出
+output_enforce_pass() {
+    cat <<EOF
+{
+  "enforce": true,
+  "blocked": false,
+  "reason": "",
+  "requiredAction": "",
+  "rollbackTo": "",
+  "humanCheckpointTriggered": false,
+  "gateSummary": {
+    "checkAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)",
+    "featureId": "$FEATURE_ID",
+    "targetGate": "$TARGET_GATE",
+    "totalChecked": $RESULT_COUNT,
+    "passed": $RESULT_COUNT,
+    "failed": 0
+  }
+}
+EOF
+    exit 0
 }
 
 # ---- 门禁产物定义 -----------------------------------------------------------
@@ -713,37 +1020,77 @@ check_gate_g7() {
 # ---- 主入口 ----------------------------------------------------------------
 
 main() {
-    # ---- 解析参数 ----
-    if [ $# -lt 1 ]; then
+    # ====================================================================
+    # 参数解析（支持 --enforce / --schema-only / --json 标志）
+    # ====================================================================
+    FEATURE_ID=""
+    TARGET_GATE_RAW=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            --enforce)
+                ENFORCE_MODE=true
+                ;;
+            --schema-only)
+                SCHEMA_ONLY_MODE=true
+                ;;
+            --json)
+                JSON_MODE=true
+                ;;
+            -*)
+                # 未知标志
+                echo "{\"error\":\"未知标志: '$arg'。支持: --enforce, --schema-only, --json\"}" >&2
+                exit 2
+                ;;
+            *)
+                if [ -z "$FEATURE_ID" ]; then
+                    FEATURE_ID="$arg"
+                elif [ -z "$TARGET_GATE_RAW" ]; then
+                    TARGET_GATE_RAW="$arg"
+                fi
+                ;;
+        esac
+    done
+
+    # ---- 参数校验 ----
+    if [ -z "$FEATURE_ID" ]; then
         cat >&2 <<EOF
-用法: $SCRIPT_NAME <feature-id> [target-gate]
+用法: $SCRIPT_NAME <feature-id> [target-gate] [flags]
 
 参数:
-  feature-id    功能目录名（位于 $FEATURES_DIR/<feature-id>/）
-  target-gate   目标门禁 G1-G7（默认 G7，即检查全部）
+  feature-id      功能目录名（位于 $FEATURES_DIR/<feature-id>/）
+  target-gate     目标门禁 G1-G7（默认 G7，即检查全部）
+  --enforce       强制执行模式：若 fail，输出阻止指令 JSON 并退出非零
+  --schema-only   仅校验 feature-state.json 结构，不检查门禁产物
+  --json          增强 JSON 输出，添加 machine-readable 字段
 
 示例:
-  $SCRIPT_NAME my-feature          # 检查全部 7 个门禁
-  $SCRIPT_NAME my-feature G3       # 仅检查 G1 到 G3
-  $SCRIPT_NAME my-feature gate-5   # 检查 G1 到 G5
+  $SCRIPT_NAME my-feature                # 检查全部 7 个门禁
+  $SCRIPT_NAME my-feature G3             # 仅检查 G1 到 G3
+  $SCRIPT_NAME my-feature --enforce      # CI 强制执行检查
+  $SCRIPT_NAME my-feature --schema-only  # 仅校验 feature-state.json
+  $SCRIPT_NAME my-feature G5 --json      # 检查 G1-G5，输出 machine-readable JSON
 
 退出码: 0=通过, 1=存在失败, 2=脚本错误
 EOF
         exit 2
     fi
 
-    local FEATURE_ID="$1"
-    local RAW_TARGET="${2:-G7}"
-    local TARGET_GATE
-    TARGET_GATE=$(normalize_gate "$RAW_TARGET")
-
-    if [ -z "$TARGET_GATE" ]; then
-        echo "{\"error\":\"无效的门禁编号: '$RAW_TARGET'。接受 G1-G7 / gate-1..gate-7 / 1..7 / all\"}" >&2
+    # ---- 互斥检查 ----
+    if [ "$ENFORCE_MODE" = true ] && [ "$SCHEMA_ONLY_MODE" = true ]; then
+        echo "{\"error\":\"--enforce 与 --schema-only 互斥，请仅指定一个\"}" >&2
         exit 2
     fi
 
-    local FEATURE_DIR="$FEATURES_DIR/$FEATURE_ID"
-    local STATE_FILE="$FEATURE_DIR/feature-state.json"
+    # ---- 标准化目标门禁 ----
+    TARGET_GATE=$(normalize_gate "${TARGET_GATE_RAW:-G7}")
+    if [ -z "$TARGET_GATE" ]; then
+        echo "{\"error\":\"无效的门禁编号: '${TARGET_GATE_RAW:-}'。接受 G1-G7 / gate-1..gate-7 / 1..7 / all\"}" >&2
+        exit 2
+    fi
+
+    FEATURE_DIR="$FEATURES_DIR/$FEATURE_ID"
+    STATE_FILE="$FEATURE_DIR/feature-state.json"
 
     # ---- 检查功能目录是否存在 ----
     if [ ! -d "$FEATURE_DIR" ]; then
@@ -752,6 +1099,14 @@ EOF
         echo "  \"hint\": \"请先创建功能目录并编写 01-openspec-proposal.md\""
         echo "}"
         exit 2
+    fi
+
+    # ====================================================================
+    # --schema-only 模式：仅校验 feature-state.json，提前返回
+    # ====================================================================
+    if [ "$SCHEMA_ONLY_MODE" = true ]; then
+        schema_only_check "$STATE_FILE"
+        exit $?
     fi
 
     # ---- 可选：feature-state.json 结构检查 ----
@@ -812,9 +1167,36 @@ EOF
         fi
     done
 
+    # ====================================================================
+    # --enforce 模式：若 fail，输出阻止指令后退出
+    # ====================================================================
+    if [ "$ENFORCE_MODE" = true ]; then
+        # 先统计实际 pass/fail 数量（从累积结果中计算，避免硬编码）
+        local enf_passed=0
+        local enf_failed=0
+        while IFS= read -r line; do
+            case "$line" in
+                *'"status":"pass"'*) enf_passed=$((enf_passed + 1)) ;;
+                *'"status":"fail"'*) enf_failed=$((enf_failed + 1)) ;;
+            esac
+        done <<< "$RESULTS_JSON"
+
+        if [ $EXIT_CODE -ne 0 ] && [ -n "$FIRST_FAILED_GATE" ]; then
+            output_enforce_blocked "$FIRST_FAILED_GATE" "$enf_passed" "$enf_failed"
+            # output_enforce_blocked 内部 exit 1，不会到达这里
+        else
+            output_enforce_pass
+            # output_enforce_pass 内部 exit 0，不会到达这里
+        fi
+    fi
+
     # ---- 组装最终 JSON 输出 ----
     local summary_status="pass"
     [ $EXIT_CODE -ne 0 ] && summary_status="fail"
+
+    # --json 模式或普通模式都输出此元数据
+    local decision="proceed"
+    [ "$summary_status" = "fail" ] && decision="block"
 
     local state_info_json="null"
     if [ -f "$STATE_FILE" ]; then
@@ -848,7 +1230,6 @@ EOF
     # 统计概要
     local total_passed=0
     local total_failed=0
-    local total_warnings=0
 
     # 使用 grep 从累积结果中统计（纯 shell 方式）
     while IFS= read -r line; do
@@ -858,11 +1239,36 @@ EOF
         esac
     done <<< "$RESULTS_JSON"
 
+    # --json 模式的额外 machine-readable 字段
+    local decision_json=""
+    local failed_gate_json="null"
+    local failed_reason_json="null"
+    if [ "$JSON_MODE" = true ] || [ -n "$FIRST_FAILED_GATE" ]; then
+        if [ -n "$FIRST_FAILED_GATE" ]; then
+            local escaped_fg
+            escaped_fg=$(json_escape "$FIRST_FAILED_GATE")
+            failed_gate_json="\"$escaped_fg\""
+            local escaped_fr
+            escaped_fr=$(json_escape "$FIRST_FAILED_REASON")
+            failed_reason_json="\"$escaped_fr\""
+        fi
+    fi
+
+    # 构建 decision 字段（machine-readable，dispatch.sh 核心消费字段）
+    local decision_str
+    decision_str=$(json_escape "$decision")
+
+    # 输出 JSON 结果
     cat <<EOF
 {
   "checkAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)",
+  "version": "$SCRIPT_VERSION",
+  "format": "$OUTPUT_FORMAT",
   "featureId": "$FEATURE_ID",
   "targetGate": "$TARGET_GATE",
+  "decision": "$decision_str",
+  "failedGate": $failed_gate_json,
+  "failedReason": $failed_reason_json,
   "summary": {
     "status": "$summary_status",
     "gatesChecked": $RESULT_COUNT,
