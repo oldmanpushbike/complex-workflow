@@ -711,9 +711,9 @@
 const BASELINE = {
   totalScore: 72,
   dimensions: {
-    gateIntegrity: 85, artifactCompleteness: 78,
-    degradationHealth: 80, reviewDepth: 65,
-    feedbackEfficacy: 75, cycleVelocity: 60, humanTouch: 55
+    processIntegrity: 85, artifactQuality: 78,
+    codeCorrectness: 70, efficiency: 60,
+    securityCompliance: 75, iterationCapability: 65, interfaceAcceptance: 70
   }
 };
 
@@ -750,9 +750,10 @@ const STATE_LABELS = {
   'S8':'知识捕获','S9':'已归档'
 };
 
-// ============ 7-Dimension Scoring (identical to scoring-engine.md) ============
+// ============ 7-Dimension Scoring (new v2 dimensions) ============
 
-function scoreGateIntegrity(feature) {
+// D1: 流程完整性 — 门禁通过率、产物存在性
+function scoreProcessIntegrity(feature) {
   const gates = feature.gates || [];
   if (gates.length === 0) return { score: 0, raw: '无门禁' };
   const stIdx = ['S0','S1','S2','S3','S4','S5','S6','S7','S8','S9'].indexOf(feature.currentState);
@@ -765,11 +766,12 @@ function scoreGateIntegrity(feature) {
   return { score: Math.round((passed / maxGate) * 100), raw: `${passed}/${maxGate}` };
 }
 
-function scoreArtifactCompleteness(feature) {
+// D2: 产物质量 — 门禁检查结果的质量（产物完整性）
+function scoreArtifactQuality(feature) {
   const gates = feature.gates || [];
   let present = 0, total = 0;
   for (const g of gates) {
-    if (g.checkResults) {
+    if (g.checkResults && Object.keys(g.checkResults).length > 0) {
       total++;
       if (g.checkResults.allArtifactsPresent) present++;
     }
@@ -777,47 +779,28 @@ function scoreArtifactCompleteness(feature) {
   if (total === 0) {
     const expected = Math.min(gates.length, 7);
     const passed = gates.filter(g => g.status === 'passed' || g.status === 'waived' || g.status === 'skipped').length;
-    return { score: expected > 0 ? Math.round((passed / expected) * 100) : 0, raw: `${passed}/${expected}` };
+    return { score: expected > 0 ? Math.round((passed / expected) * 100) : 0, raw: `${passed}/${expected} 门禁` };
   }
-  return { score: Math.round((present / total) * 100), raw: `${present}/${total}` };
+  return { score: Math.round((present / total) * 100), raw: `${present}/${total} 完备` };
 }
 
-function scoreDegradationHealth(feature) {
-  const events = feature.fallbackEvents || [];
-  if (events.length === 0) return { score: 100, raw: '零事件' };
-  let sw = 0;
-  for (const e of events) sw += FALLBACK_WEIGHTS[e.eventType] || 1;
-  return { score: Math.max(0, 100 - sw * 5), raw: `${events.length}事件, 权重${sw}` };
-}
-
-function scoreReviewDepth(feature) {
+// D3: 代码正确性 — 审查发现的严重度、修复率
+function scoreCodeCorrectness(feature) {
   const gates = feature.gates || [];
-  const gate5 = gates[4];
+  const gate5 = gates[4]; // Gate 5 = review
   const findings = gate5 ? (gate5.findings || []) : [];
   const F = findings.length;
   if (F === 0) return { score: 0, raw: '无审查发现' };
   const P0 = findings.filter(f => f.severity === 'P0').length;
   const P1 = findings.filter(f => f.severity === 'P1').length;
-  let score = Math.min(100, Math.min(F * 10, 60) + P0 * 10 + P1 * 5);
+  const fixed = findings.filter(f => f.status === 'fixed').length;
+  let score = Math.min(100, Math.min(F * 8, 50) + P0 * 10 + P1 * 5 + fixed * 5);
   if (feature.mode === 'single-agent') score = Math.round(score * 0.7);
-  return { score, raw: `${F}发现(P0:${P0} P1:${P1})` };
+  return { score, raw: `${F}发现(P0:${P0} P1:${P1} 已修复:${fixed})` };
 }
 
-function scoreFeedbackEfficacy(feature) {
-  const fb = feature.feedbackLoop;
-  if (!fb || (fb.retryCount === 0 && !fb.lastFailure)) return { score: 100, raw: '无失败' };
-  if (fb.stalledSince) {
-    const hrs = (Date.now() - new Date(fb.stalledSince).getTime()) / 3600000;
-    if (hrs > 48) return { score: 0, raw: `停滞${hrs.toFixed(0)}h` };
-  }
-  let s = 50;
-  if (fb.feedbackInjected) s += 30;
-  if (fb.retryCount < (fb.maxRetries || 3)) s += 10;
-  if (fb.feedbackSource && fb.feedbackSource.length > 0) s += 10;
-  return { score: s, raw: `重试${fb.retryCount||0}/${fb.maxRetries||3}` };
-}
-
-function scoreCycleVelocity(feature) {
+// D4: 效率 — 状态流转速度
+function scoreEfficiency(feature) {
   const h = feature.stateHistory || [];
   if (h.length < 2) return { score: null, raw: '转移不足' };
   const EXPECTED = {
@@ -838,35 +821,86 @@ function scoreCycleVelocity(feature) {
   return { score: Math.round(scores.reduce((a,b)=>a+b,0) / scores.length), raw: `${scores.length}次转移` };
 }
 
-function scoreHumanTouch(feature) {
-  const decisions = feature.humanDecisions || [];
-  const H = decisions.length;
-  if (H === 0) return { score: 0, raw: '零人工参与' };
-  let base;
-  if (H <= 1) base = 25;
-  else if (H === 2) base = 50;
-  else if (H === 3) base = 80;
-  else if (H === 4) base = 100;
-  else base = Math.max(20, 100 - (H - 4) * 15);
+// D5: 安全合规 — 安全类发现、凭证暴露、合规缺陷
+function scoreSecurityCompliance(feature) {
+  const gates = feature.gates || [];
+  let allFindings = [];
+  for (const g of gates) {
+    if (g.findings) allFindings = allFindings.concat(g.findings);
+  }
+  const secFindings = allFindings.filter(f =>
+    f.category === 'security' ||
+    (f.description && (f.description.includes('Key') || f.description.includes('凭证') || f.description.includes('暴露') || f.description.includes('token')))
+  );
+  const F = secFindings.length;
+  if (F === 0) {
+    const reviewGate = gates[4];
+    const hasReview = reviewGate && (reviewGate.status === 'passed' || reviewGate.status === 'waived');
+    return { score: hasReview ? 100 : 60, raw: hasReview ? '无安全发现' : '审查未完成' };
+  }
+  const fixed = secFindings.filter(f => f.status === 'fixed').length;
+  const P0 = secFindings.filter(f => f.severity === 'P0').length;
+  let score = Math.max(0, 100 - P0 * 30 - (F - fixed) * 12);
+  return { score, raw: `${F}安全发现(P0:${P0} 已修复:${fixed})` };
+}
 
-  const covered = new Set(decisions.map(d => d.gateId));
-  let crit = 0;
-  for (const g of ['gate-1','gate-2','S4','S7']) { if (covered.has(g)) crit++; }
-  const cpCount = decisions.filter(d => d.checkpointFormat).length;
-  return { score: Math.min(100, base + crit * 5 + Math.min(20, cpCount * 5)), raw: `${H}决策` };
+// D6: 迭代能力 — 反馈循环成功率、修复效率
+function scoreIterationCapability(feature) {
+  const fb = feature.feedbackLoop;
+  if (!fb || (fb.retryCount === 0 && !fb.lastFailure)) return { score: 100, raw: '无失败' };
+  if (fb.stalledSince) {
+    const hrs = (Date.now() - new Date(fb.stalledSince).getTime()) / 3600000;
+    if (hrs > 48) return { score: 0, raw: `停滞${hrs.toFixed(0)}h` };
+  }
+  const retries = fb.retryHistory || [];
+  const successes = retries.filter(r => r.result === 'passed').length;
+  let s = 40;
+  if (successes > 0) s += successes * 20;
+  if (fb.feedbackInjected) s += 20;
+  if (fb.retryCount < (fb.maxRetries || 3)) s += 10;
+  if (fb.feedbackSource && fb.feedbackSource.length > 0) s += 10;
+  return { score: Math.min(100, s), raw: `重试${fb.retryCount||0}/${fb.maxRetries||3} 成功${successes}` };
+}
+
+// D7: 接口验收 — 验证结果、验收标准、契约检查
+function scoreInterfaceAcceptance(feature) {
+  const decisions = feature.humanDecisions || [];
+  const gates = feature.gates || [];
+  const verifyGate = gates[5]; // Gate 6 = verification
+  let base = 0;
+
+  if (verifyGate && verifyGate.status === 'passed') base = 80;
+  else if (verifyGate && verifyGate.status === 'in_progress') base = 50;
+  else if (verifyGate && verifyGate.status === 'waived') base = 60;
+
+  const verifyFindings = verifyGate ? (verifyGate.findings || []) : [];
+  if (verifyFindings.length > 0) base += Math.min(20, verifyFindings.length * 5);
+
+  const acceptDecisions = decisions.filter(d =>
+    (d.gateId === 'S7' || d.gateId === 'gate-6') &&
+    (d.summary.includes('验收') || d.summary.includes('通过') || (d.outcome && d.outcome.includes('批准')))
+  );
+  if (acceptDecisions.length > 0) base += 10;
+
+  if (!verifyGate || verifyGate.status === 'pending') {
+    const earlyPassed = gates.filter(g => g.status === 'passed').length;
+    return { score: Math.min(60, earlyPassed * 10), raw: `前${earlyPassed}门禁通过` };
+  }
+
+  return { score: Math.min(100, base), raw: verifyGate.status === 'passed' ? '验证通过' : '验证未完成' };
 }
 
 function computeFullScore(feature) {
   const dims = {
-    gateIntegrity: scoreGateIntegrity(feature),
-    artifactCompleteness: scoreArtifactCompleteness(feature),
-    degradationHealth: scoreDegradationHealth(feature),
-    reviewDepth: scoreReviewDepth(feature),
-    feedbackEfficacy: scoreFeedbackEfficacy(feature),
-    cycleVelocity: scoreCycleVelocity(feature),
-    humanTouch: scoreHumanTouch(feature)
+    processIntegrity: scoreProcessIntegrity(feature),
+    artifactQuality: scoreArtifactQuality(feature),
+    codeCorrectness: scoreCodeCorrectness(feature),
+    efficiency: scoreEfficiency(feature),
+    securityCompliance: scoreSecurityCompliance(feature),
+    iterationCapability: scoreIterationCapability(feature),
+    interfaceAcceptance: scoreInterfaceAcceptance(feature)
   };
-  const w = [0.20,0.20,0.15,0.15,0.10,0.10,0.10];
+  const w = [0.18, 0.15, 0.18, 0.12, 0.15, 0.12, 0.10];
   let total = 0, tw = 0, i = 0;
   for (const dim of Object.values(dims)) {
     if (dim.score !== null) { total += dim.score * w[i]; tw += w[i]; }
@@ -1421,13 +1455,13 @@ function renderSidebar(scored, experience) {
     <div class="sidebar-section">
       <h3>📐 评分维度权重</h3>
       <div style="font-size:12px;color:var(--text-secondary);line-height:2;">
-        <div>门禁完整性 <span style="float:right;color:var(--gold-light);">20%</span></div>
-        <div>产物完备性 <span style="float:right;color:var(--gold-light);">20%</span></div>
-        <div>降级健康度 <span style="float:right;color:var(--gold-light);">15%</span></div>
-        <div>审查深度 <span style="float:right;color:var(--gold-light);">15%</span></div>
-        <div>反馈效能 <span style="float:right;color:var(--gold-light);">10%</span></div>
-        <div>流转速度 <span style="float:right;color:var(--gold-light);">10%</span></div>
-        <div>人工触点 <span style="float:right;color:var(--gold-light);">10%</span></div>
+        <div>流程完整性 <span style="float:right;color:var(--gold-light);">18%</span></div>
+        <div>产物质量 <span style="float:right;color:var(--gold-light);">15%</span></div>
+        <div>代码正确性 <span style="float:right;color:var(--gold-light);">18%</span></div>
+        <div>效率 <span style="float:right;color:var(--gold-light);">12%</span></div>
+        <div>安全合规 <span style="float:right;color:var(--gold-light);">15%</span></div>
+        <div>迭代能力 <span style="float:right;color:var(--gold-light);">12%</span></div>
+        <div>接口验收 <span style="float:right;color:var(--gold-light);">10%</span></div>
       </div>
     </div>
   `;
@@ -1454,8 +1488,8 @@ function renderCharts(scored) {
   // ---- Chart 1: Gate Pass Rate Trend ----
   if (n >= 2 && typeof Chart !== 'undefined') {
     const labels = validScored.map(s => s.feature.featureId);
-    const data = validScored.map(s => s.scores.dimensions.gateIntegrity.score);
-    const baselineLine = Array(n).fill(BASELINE.dimensions.gateIntegrity);
+    const data = validScored.map(s => s.scores.dimensions.processIntegrity.score);
+    const baselineLine = Array(n).fill(BASELINE.dimensions.processIntegrity);
 
     const ctx = document.getElementById('chartGateTrend').getContext('2d');
     chartInstances.gateTrend = new Chart(ctx, {
@@ -1464,7 +1498,7 @@ function renderCharts(scored) {
         labels,
         datasets: [
           {
-            label: '门禁完整性',
+            label: '流程完整性',
             data,
             borderColor: '#d4a843',
             backgroundColor: 'rgba(212,168,67,0.08)',
@@ -1611,7 +1645,7 @@ function renderCharts(scored) {
 
 function renderGateTrendSVG(scored) {
   const w = 600, h = 240, pad = { top: 20, right: 20, bottom: 30, left: 50 };
-  const points = scored.map(s => s.scores.dimensions.gateIntegrity.score);
+  const points = scored.map(s => s.scores.dimensions.processIntegrity.score);
   const maxV = 100, minV = 0;
 
   const xScale = i => pad.left + (i / Math.max(points.length - 1, 1)) * (w - pad.left - pad.right);
@@ -1629,8 +1663,8 @@ function renderGateTrendSVG(scored) {
 
   document.getElementById('chartGateFallback').innerHTML = `
     <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:240px;">
-      <line x1="${pad.left}" y1="${yScale(BASELINE.dimensions.gateIntegrity)}" x2="${w-pad.right}" y2="${yScale(BASELINE.dimensions.gateIntegrity)}" stroke="#8b949e" stroke-width="1" stroke-dasharray="6,3"/>
-      <text x="${w-pad.right}" y="${yScale(BASELINE.dimensions.gateIntegrity)-5}" text-anchor="end" fill="#8b949e" font-size="10">基线 ${BASELINE.dimensions.gateIntegrity}</text>
+      <line x1="${pad.left}" y1="${yScale(BASELINE.dimensions.processIntegrity)}" x2="${w-pad.right}" y2="${yScale(BASELINE.dimensions.processIntegrity)}" stroke="#8b949e" stroke-width="1" stroke-dasharray="6,3"/>
+      <text x="${w-pad.right}" y="${yScale(BASELINE.dimensions.processIntegrity)-5}" text-anchor="end" fill="#8b949e" font-size="10">基线 ${BASELINE.dimensions.processIntegrity}</text>
       <path d="${pathData}" fill="none" stroke="#d4a843" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       ${dots}
     </svg>`;

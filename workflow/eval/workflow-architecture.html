@@ -890,13 +890,13 @@
       <tr><th>维度</th><th>权重</th><th>度量内容</th><th>公式方法</th></tr>
     </thead>
     <tbody>
-      <tr><td class="s-name">D1 流程完整性</td><td>22%</td><td>所有门禁产物是否存在且状态为passed</td><td>gate artifacts 文件存在性 + 大小阈值</td></tr>
-      <tr><td class="s-name">D2 审查质量</td><td>22%</td><td>grill-me + review 发现数、P0/P1覆盖率</td><td>density(50) + severity(50) + coverage(10)，single-agent×0.75</td></tr>
-      <tr><td class="s-name">D3 降级频率</td><td>15%</td><td>single-agent 模式占比、降级事件严重度</td><td>15种事件类型 severity_weight ×6，floor 10</td></tr>
-      <tr><td class="s-name">D4 人工响应延迟</td><td>10%</td><td>人类审批的平均响应时间</td><td>阶梯函数：≤1h=100, ≤4h=85, ≤12h=70, ≤24h=55, ≤72h=35, >72h=15</td></tr>
-      <tr><td class="s-name">D5 经验沉淀率</td><td>12%</td><td>retro → pattern 转化、ADR 决策可追溯</td><td>ADR结构检测 + Retro结构检测 + Pattern文件引用扫描</td></tr>
-      <tr><td class="s-name">D6 重试成功率</td><td>10%</td><td>反馈循环修正成功率</td><td>retryHistory passRate×80 + 反馈注入bonus − 超限/停滞penalty</td></tr>
-      <tr><td class="s-name">D7 文档健康度</td><td>9%</td><td>ADR/retro 文件存在性和体量</td><td>文件大小阶梯：≥500B=50, ≥300B=40, ≥100B=25, <100B=10</td></tr>
+      <tr><td class="s-name">D1 流程完整性</td><td>18%</td><td>所有门禁产物是否存在且状态为passed</td><td>gate artifacts 文件存在性 + 大小阈值 + 状态检查</td></tr>
+      <tr><td class="s-name">D2 产物质量</td><td>15%</td><td>门禁检查结果的完备性，产物是否通过内容校验</td><td>checkResults.allArtifactsPresent 覆盖率 + checkResults 字段丰度</td></tr>
+      <tr><td class="s-name">D3 代码正确性</td><td>18%</td><td>审查发现中 P0/P1 密度、修复率、单Agent折扣</td><td>density(50) + severity(50) + fixBonus(已修复×5)，single-agent×0.7</td></tr>
+      <tr><td class="s-name">D4 效率</td><td>12%</td><td>状态流转耗时 vs 预期基准</td><td>转移耗时阶梯函数：≤预期=100，超出按10分/h衰减</td></tr>
+      <tr><td class="s-name">D5 安全合规</td><td>15%</td><td>安全类发现数量、P0暴露风险、修复完成率</td><td>P0×30 penalty + 未修复×12 penalty，无安全发现=100</td></tr>
+      <tr><td class="s-name">D6 迭代能力</td><td>12%</td><td>反馈循环修正成功率与修复效率</td><td>retryHistory 成功率×20 + feedbackInjected + 未达上限bonus</td></tr>
+      <tr><td class="s-name">D7 接口验收</td><td>10%</td><td>验证门禁状态、验收标准通过、人类签核</td><td>Gate6状态阶梯 + 验证发现+验收决策bonus</td></tr>
     </tbody>
   </table>
   </div>
