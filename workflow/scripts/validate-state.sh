@@ -800,6 +800,127 @@ check_metadata_recommendations() {
     append_check "metadata-recommendations" "true"
 }
 
+# 校验 12：产物内容质量检查（空壳检测 + 反注水）
+# 检查每个 passed 门禁的产物文件是否有实质内容（不仅检查结构，还检查内容）
+check_artifact_content_quality() {
+    local state_file="$1"
+    local feature_dir
+    feature_dir=$(dirname "$state_file")
+
+    # 从 feature-state.json 或默认路径获取产物文件
+    local feature_name
+    feature_name=$(basename "$feature_dir")
+
+    # 检查每个 passed gate 的 artifacts
+    local gate_ids=("gate-1" "gate-2" "gate-3" "gate-4" "gate-5" "gate-6" "gate-7")
+    local gate_files=(
+        "01-openspec-proposal.md"
+        "02-grill-me-report.md"
+        "03-task-skill-map.md"
+        "04-implementation-plan.md"
+        "reviews/"
+        "05-verification-log.md"
+        "06-adr.md,07-task-retro.md"
+    )
+    local min_content_lines=20  # 少于20行可能为空壳
+
+    for i in "${!gate_ids[@]}"; do
+        local gate_id="${gate_ids[$i]}"
+        local gate_status
+
+        # 获取 gate 状态
+        if [ "$HAS_JQ" = true ]; then
+            gate_status=$(jq -r ".gates[] | select(.gateId == \"$gate_id\") | .status // \"pending\"" "$state_file" 2>/dev/null)
+        else
+            gate_status=$(grep -F "\"gateId\": \"$gate_id\"" "$state_file" | head -1 | grep -oE '"status"[[:space:]]*:[[:space:]]*"([^"]+)"' | sed 's/.*"\([^"]*\)"$/\1/')
+        fi
+
+        if [ "$gate_status" != "passed" ]; then
+            continue
+        fi
+
+        # 获取这个门禁的 artifacts
+        local artifacts_str
+        if [ "$HAS_JQ" = true ]; then
+            artifacts_str=$(jq -r ".gates[] | select(.gateId == \"$gate_id\") | .artifacts[]?" "$state_file" 2>/dev/null)
+        else
+            artifacts_str="${gate_files[$i]}"
+        fi
+
+        # 对每个 artifact 检查内容
+        for art in $artifacts_str; do
+            [ -z "$art" ] && continue
+            local full_path="$feature_dir/$art"
+
+            # 跳过目录 artifact
+            if [ -d "$full_path" ]; then
+                local md_count
+                md_count=$(find "$full_path" -maxdepth 1 -name "*.md" 2>/dev/null | wc -l)
+                if [ "$md_count" -eq 0 ]; then
+                    append_warning "$gate_id: $art 目录为空（无 .md 文件）"
+                fi
+                # 检查每个 .md 文件
+                for md_file in "$full_path"/*.md; do
+                    [ ! -f "$md_file" ] && continue
+                    _check_file_content "$gate_id" "$md_file"
+                done
+                continue
+            fi
+
+            # 跳过不存在的文件
+            if [ ! -f "$full_path" ]; then
+                continue
+            fi
+
+            _check_file_content "$gate_id" "$full_path"
+        done
+    done
+
+    append_check "artifact-content-quality" "true"
+}
+
+# 检查单个文件的内容质量
+_check_file_content() {
+    local gate_id="$1"
+    local file_path="$2"
+    local file_name
+    file_name=$(basename "$file_path")
+    local size
+    size=$(wc -c < "$file_path" 2>/dev/null || echo "0")
+    size=$(echo "$size" | tr -d '[:space:]')
+    local lines
+    lines=$(wc -l < "$file_path" 2>/dev/null || echo "0")
+    lines=$(echo "$lines" | tr -d '[:space:]')
+    local unique_lines
+    unique_lines=$(sort -u "$file_path" 2>/dev/null | wc -l)
+    unique_lines=$(echo "$unique_lines" | tr -d '[:space:]')
+
+    # 检测空壳：行数 < 5 或 唯一行占比 < 30%
+    if [ "${lines:-0}" -lt 5 ]; then
+        append_warning "$gate_id: $file_name 疑似空壳（仅 ${lines:-0} 行，${size:-0}B）"
+    elif [ "${unique_lines:-0}" -gt 0 ] && [ "${lines:-1}" -gt 0 ]; then
+        local ratio=$(( unique_lines * 100 / lines ))
+        if [ "$ratio" -lt 30 ]; then
+            append_warning "$gate_id: $file_name 疑似注水（唯一行占比 ${ratio}%，模板重复行多）"
+        fi
+    fi
+
+    # 检测模板空壳：文件过小但 status 为 passed
+    local min_size=100
+    case "$file_name" in
+        01-openspec-proposal.md) min_size=500 ;;
+        02-grill-me-report.md)   min_size=300 ;;
+        03-task-skill-map.md)    min_size=300 ;;
+        05-verification-log.md)  min_size=100 ;;
+        06-adr.md)               min_size=50 ;;
+        07-task-retro.md)        min_size=50 ;;
+    esac
+
+    if [ "${size:-0}" -lt "$min_size" ]; then
+        append_warning "$gate_id: $file_name 内容不足（${size}B < ${min_size}B 阈值），可能为模板空壳"
+    fi
+}
+
 # ---- --fix 模式：自动修正 ------------------------------------------------
 
 # 修正缺失的 createdAt / updatedAt
@@ -1137,6 +1258,9 @@ EOF
 
     # 11. metadata 建议（警告级）
     check_metadata_recommendations "$state_file"
+
+    # 12. 产物内容质量（警告级 — 空壳检测 + 反注水）
+    check_artifact_content_quality "$state_file"
 
     # 全局建议（不绑定特定校验项）
     if [ "$HAS_JQ" != true ]; then

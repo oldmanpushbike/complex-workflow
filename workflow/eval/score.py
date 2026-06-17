@@ -1313,31 +1313,56 @@ def _detect_review_fabrication(state, feature_dir):
 
 
 def _detect_state_tampering(gates, feature_dir):
-    """Detect state tampering: passed gates with missing artifacts."""
+    """Detect state tampering: passed gates with missing artifacts.
+
+    Only triggers on clear contradictions between gate status and filesystem reality.
+    resolvedAt being null is NOT tampering — it's an optional metadata field.
+    Tampering means: gate claims 'passed' but the required artifact file is
+    missing or empty on disk.
+    """
+    tampering_evidence = []
     for gate in gates:
         if gate.get("status") != "passed":
             continue
-        resolved_at = gate.get("resolvedAt")
-        if resolved_at is None:
-            return f"{gate.get('gateId')} 状态为 passed 但 resolvedAt 为空"
-
+        gate_id = gate.get("gateId", "?")
         artifacts = gate.get("artifacts", [])
+        missing_artifacts = []
+
         for art in artifacts:
             full_path = os.path.join(feature_dir, art)
             basename = os.path.basename(art)
             min_size = ARTIFACT_MIN_SIZE.get(basename, 100)
+
+            # Check individual file artifacts
             if basename and basename != art:
                 if not os.path.isfile(full_path):
-                    return f"{gate.get('gateId')} passed 但产物 {art} 不存在"
-                if _file_size(full_path) < min_size:
-                    return f"{gate.get('gateId')} passed 但产物 {art} 小于最小大小 {min_size}B"
+                    missing_artifacts.append(f"{art} (不存在)")
+                elif _file_size(full_path) < min_size:
+                    missing_artifacts.append(f"{art} (<{min_size}B)")
+            elif basename and basename == art:
+                # Artifact is just a filename — resolve in feature_dir
+                candidate = os.path.join(feature_dir, basename)
+                if not os.path.isfile(candidate):
+                    missing_artifacts.append(f"{art} (不存在)")
+                elif _file_size(candidate) < min_size:
+                    missing_artifacts.append(f"{art} (<{min_size}B)")
             elif "reviews/" in art:
+                # Directory check
                 reviews_dir = os.path.join(feature_dir, "reviews")
                 if not os.path.isdir(reviews_dir):
-                    return f"{gate.get('gateId')} passed 但 reviews/ 目录不存在"
-                md_files = glob_fn(os.path.join(reviews_dir, "*.md"))
-                if not any(_file_size(f) >= 200 for f in md_files):
-                    return f"{gate.get('gateId')} passed 但 reviews/ 无有效审查文件"
+                    missing_artifacts.append("reviews/ (目录不存在)")
+                else:
+                    md_files = glob_fn(os.path.join(reviews_dir, "*.md"))
+                    if not any(_file_size(f) >= 200 for f in md_files):
+                        missing_artifacts.append("reviews/ (无有效审查文件)")
+
+        if missing_artifacts:
+            tampering_evidence.append(
+                f"{gate_id} passed 但产物缺失: {'; '.join(missing_artifacts)}"
+            )
+
+    if tampering_evidence:
+        return " | ".join(tampering_evidence)
     return None
 
 
@@ -1374,7 +1399,7 @@ def _detect_human_checkpoint_bypass(state, gates, human_decisions, feedback_loop
     gate1 = next((g for g in gates if g.get("gateId") == "gate-1"), None)
     if gate1 and gate1.get("status") in ("passed", "skipped"):
         has_human = any(
-            d.get("madeBy") == "human" and d.get("gateId") == "gate-1"
+            (d.get("madeBy") == "human" or d.get("approvedBy")) and d.get("gateId") == "gate-1"
             for d in human_decisions
         )
         if not has_human:

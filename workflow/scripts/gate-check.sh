@@ -252,6 +252,14 @@ check_content_patterns() {
     return $missing_count
 }
 
+# 大小写不敏感的 grep -qF 安全替代
+# grep -i 在某些 Windows Git Bash 上会崩溃（exit 134），
+# 此函数通过 tr 转小写后 grep -qF 实现等价功能
+safe_igrep() {
+    local pattern="$1"
+    tr '[:upper:]' '[:lower:]' | grep -qF "$pattern" 2>/dev/null
+}
+
 # 统计目录下匹配 glob 的文件数
 count_files_in_dir() {
     local dir="$1"
@@ -660,27 +668,27 @@ check_gate_g1() {
         head_data=$(head -100 "$proposal" 2>/dev/null)
 
         # 检查「目标」
-        if ! echo "$head_data" | grep -qF "目标" && ! echo "$head_data" | grep -qiF "Goal"; then
+        if ! echo "$head_data" | grep -qF "目标" && ! echo "$head_data" | safe_igrep "goal"; then
             warnings+=("提案中未找到「目标」章节")
         fi
 
         # 检查「非目标」
-        if ! echo "$head_data" | grep -qF "非目标" && ! echo "$head_data" | grep -qiF "Non-Goal"; then
+        if ! echo "$head_data" | grep -qF "非目标" && ! echo "$head_data" | safe_igrep "non-goal"; then
             warnings+=("提案中未找到「非目标」章节")
         fi
 
         # 检查「验收标准」
-        if ! echo "$head_data" | grep -qF "验收" && ! echo "$head_data" | grep -qiF "Acceptance"; then
+        if ! echo "$head_data" | grep -qF "验收" && ! echo "$head_data" | safe_igrep "acceptance"; then
             warnings+=("提案中未找到「验收标准」章节")
         fi
 
         # 检查「用户与角色」
-        if ! echo "$head_data" | grep -qF "用户" && ! echo "$head_data" | grep -qiF "User"; then
+        if ! echo "$head_data" | grep -qF "用户" && ! echo "$head_data" | safe_igrep "user"; then
             warnings+=("提案中未找到「用户与角色」章节")
         fi
 
         # 检查「决策日志」（全新功能需要）——脚本无法判断是否为全新功能，降级为提示
-        if ! echo "$head_data" | grep -qF "决策日志" && ! echo "$head_data" | grep -qiF "Decision Log" && ! echo "$head_data" | grep -qiF "Decision"; then
+        if ! echo "$head_data" | grep -qF "决策日志" && ! echo "$head_data" | safe_igrep "decision log" && ! echo "$head_data" | safe_igrep "decision"; then
             warnings+=("提案缺少「决策日志」章节——全新功能需人类审批记录")
         fi
     fi
@@ -714,20 +722,20 @@ check_gate_g2() {
 
         # 必须包含风险发现表格或 P0/P1 引用
         if ! echo "$head_data" | grep -qF "P0" && ! echo "$head_data" | grep -qF "P1" \
-            && ! echo "$head_data" | grep -qiF "Finding" && ! echo "$head_data" | grep -qF "风险" \
-            && ! echo "$head_data" | grep -qiF "Severity"; then
+            && ! echo "$head_data" | safe_igrep "finding" && ! echo "$head_data" | grep -qF "风险" \
+            && ! echo "$head_data" | safe_igrep "severity"; then
             warnings+=("grill-me 报告未找到风险发现（Finding/风险/P0/P1）相关内容")
         fi
 
         # 检查是否有 Accepted Residual Risks 章节
-        if ! echo "$head_data" | grep -qiF "Accepted" && ! echo "$head_data" | grep -qiF "Residual" \
+        if ! echo "$head_data" | safe_igrep "accepted" && ! echo "$head_data" | safe_igrep "residual" \
             && ! echo "$head_data" | grep -qF "接受" && ! echo "$head_data" | grep -qF "残留"; then
             warnings+=("grill-me 报告缺少「已接受的残留风险」章节——未解决风险需明确记录")
         fi
 
         # 检查 grill-me 来源标注
-        if ! echo "$head_data" | grep -qiF "Source:" && ! echo "$head_data" | grep -qF "来源" \
-            && ! echo "$head_data" | grep -qiF "grill-me" && ! echo "$head_data" | grep -qiF "manual-grill"; then
+        if ! echo "$head_data" | safe_igrep "source:" && ! echo "$head_data" | grep -qF "来源" \
+            && ! echo "$head_data" | safe_igrep "grill-me" && ! echo "$head_data" | safe_igrep "manual-grill"; then
             warnings+=("grill-me 报告缺少来源标注（Source 字段）——需标明 codex/claude/manual")
         fi
     fi
@@ -759,18 +767,18 @@ check_gate_g3() {
         head_data=$(head -100 "$task_map" 2>/dev/null)
 
         # 必须包含任务表格或 Task ID
-        if ! echo "$head_data" | grep -qiF "Task ID" && ! echo "$head_data" | grep -qF "|" ; then
+        if ! echo "$head_data" | safe_igrep "task id" && ! echo "$head_data" | grep -qF "|" ; then
             warnings+=("任务映射表缺少任务表格——每个任务需有 Task ID")
         fi
 
         # 检查技能路由
-        if ! echo "$head_data" | grep -qiF "Skill" && ! echo "$head_data" | grep -qF "技能" \
-            && ! echo "$head_data" | grep -qiF "route"; then
+        if ! echo "$head_data" | safe_igrep "skill" && ! echo "$head_data" | grep -qF "技能" \
+            && ! echo "$head_data" | safe_igrep "route"; then
             warnings+=("任务映射表缺少技能路由（Skill/路由）字段")
         fi
 
         # 检查回滚说明
-        if ! echo "$head_data" | grep -qiF "Rollback" && ! echo "$head_data" | grep -qF "回滚"; then
+        if ! echo "$head_data" | safe_igrep "rollback" && ! echo "$head_data" | grep -qF "回滚"; then
             warnings+=("任务映射表缺少回滚说明（Rollback）列")
         fi
     fi
@@ -804,14 +812,14 @@ check_gate_g4() {
         head_data=$(head -80 "$impl_plan" 2>/dev/null)
 
         # 检查是否列出了已批准的任务范围
-        if ! echo "$head_data" | grep -qiF "Approved Scope" && ! echo "$head_data" | grep -qF "批准" \
-            && ! echo "$head_data" | grep -qiF "Task ID"; then
+        if ! echo "$head_data" | safe_igrep "approved scope" && ! echo "$head_data" | grep -qF "批准" \
+            && ! echo "$head_data" | safe_igrep "task id"; then
             warnings+=("实现计划缺少「已批准范围」章节——需明确引用已批准的 Task ID")
         fi
 
         # 检查是否有 Actual Files 记录（表明实际实现已完成）
-        if ! echo "$head_data" | grep -qiF "Actual" && ! echo "$head_data" | grep -qF "实际" \
-            && ! echo "$head_data" | grep -qiF "Files To Touch"; then
+        if ! echo "$head_data" | safe_igrep "actual" && ! echo "$head_data" | grep -qF "实际" \
+            && ! echo "$head_data" | safe_igrep "files to touch"; then
             warnings+=("实现计划缺少实际文件记录——实现可能尚未开始或未更新")
         fi
     fi
@@ -883,12 +891,12 @@ check_gate_g5() {
         head_data=$(head -60 "$review_file" 2>/dev/null)
 
         # 检查是否标注了 single-agent
-        if ! echo "$head_data" | grep -qiF "dual-agent" && ! echo "$head_data" | grep -qiF "single-agent"; then
+        if ! echo "$head_data" | safe_igrep "dual-agent" && ! echo "$head_data" | safe_igrep "single-agent"; then
             warnings+=("$review_name 缺少审查模式标注（dual-agent / single-agent）")
         fi
 
         # 检查是否有 Final Review Decision
-        if ! echo "$head_data" | grep -qiF "Final Review" && ! echo "$head_data" | grep -qiF "Decision:" && ! echo "$head_data" | grep -qF "审查决定"; then
+        if ! echo "$head_data" | safe_igrep "final review" && ! echo "$head_data" | safe_igrep "decision:" && ! echo "$head_data" | grep -qF "审查决定"; then
             warnings+=("$review_name 缺少最终审查决定（Final Review / Decision）")
         fi
     done
@@ -921,24 +929,24 @@ check_gate_g6() {
         head_data=$(head -100 "$verify_log" 2>/dev/null)
 
         # 检查验收标准追踪
-        if ! echo "$head_data" | grep -qiF "Acceptance" && ! echo "$head_data" | grep -qF "验收"; then
+        if ! echo "$head_data" | safe_igrep "acceptance" && ! echo "$head_data" | grep -qF "验收"; then
             warnings+=("验证日志缺少「验收标准追溯」章节")
         fi
 
         # 检查测试记录
-        if ! echo "$head_data" | grep -qiF "Test" && ! echo "$head_data" | grep -qF "测试" \
-            && ! echo "$head_data" | grep -qiF "Unit" && ! echo "$head_data" | grep -qiF "Integration" \
-            && ! echo "$head_data" | grep -qiF "Manual"; then
+        if ! echo "$head_data" | safe_igrep "test" && ! echo "$head_data" | grep -qF "测试" \
+            && ! echo "$head_data" | safe_igrep "unit" && ! echo "$head_data" | safe_igrep "integration" \
+            && ! echo "$head_data" | safe_igrep "manual"; then
             warnings+=("验证日志缺少测试记录（Unit/Integration/Manual）")
         fi
 
         # 检查残余风险
-        if ! echo "$head_data" | grep -qiF "Residual Risk" && ! echo "$head_data" | grep -qF "残余风险"; then
+        if ! echo "$head_data" | safe_igrep "residual risk" && ! echo "$head_data" | grep -qF "残余风险"; then
             warnings+=("验证日志缺少「残余风险」记录")
         fi
 
         # 检查最终决定
-        if ! echo "$head_data" | grep -qiF "Ship" && ! echo "$head_data" | grep -qiF "Hold" \
+        if ! echo "$head_data" | safe_igrep "ship" && ! echo "$head_data" | safe_igrep "hold" \
             && ! echo "$head_data" | grep -qF "最终决定"; then
             warnings+=("验证日志缺少最终发布决定（Ship/Hold）")
         fi
@@ -976,12 +984,12 @@ check_gate_g7() {
         adr_head=$(head -80 "$adr" 2>/dev/null)
 
         # ADR 必须包含 Context/Decision/Consequences
-        if ! echo "$adr_head" | grep -qiF "Context" && ! echo "$adr_head" | grep -qiF "Decision"; then
+        if ! echo "$adr_head" | safe_igrep "context" && ! echo "$adr_head" | safe_igrep "decision"; then
             warnings+=("ADR 缺少 Context/Decision 核心章节")
         fi
         # 检查 Revisit Trigger（可重新审视的条件）
-        if ! echo "$adr_head" | grep -qiF "Revisit" && ! echo "$adr_head" | grep -qF "重新审视" \
-            && ! echo "$adr_head" | grep -qiF "Trigger"; then
+        if ! echo "$adr_head" | safe_igrep "revisit" && ! echo "$adr_head" | grep -qF "重新审视" \
+            && ! echo "$adr_head" | safe_igrep "trigger"; then
             warnings+=("ADR 缺少「Revisit Trigger」——未定义何时重新审视此决策")
         fi
     fi
@@ -999,14 +1007,14 @@ check_gate_g7() {
         retro_head=$(head -80 "$retro" 2>/dev/null)
 
         # 任务回顾必须包含经验教训
-        if ! echo "$retro_head" | grep -qiF "What Worked" && ! echo "$retro_head" | grep -qiF "What Failed" \
-            && ! echo "$retro_head" | grep -qiF "Reusable Pattern" && ! echo "$retro_head" | grep -qF "成功" \
+        if ! echo "$retro_head" | safe_igrep "what worked" && ! echo "$retro_head" | safe_igrep "what failed" \
+            && ! echo "$retro_head" | safe_igrep "reusable pattern" && ! echo "$retro_head" | grep -qF "成功" \
             && ! echo "$retro_head" | grep -qF "失败" && ! echo "$retro_head" | grep -qF "可复用"; then
             warnings+=("任务回顾缺少经验教训章节（What Worked / What Failed）")
         fi
         # 检查是否有后续任务
-        if ! echo "$retro_head" | grep -qiF "Follow-Up" && ! echo "$retro_head" | grep -qF "后续" \
-            && ! echo "$retro_head" | grep -qiF "Knowledge To Carry"; then
+        if ! echo "$retro_head" | safe_igrep "follow-up" && ! echo "$retro_head" | grep -qF "后续" \
+            && ! echo "$retro_head" | safe_igrep "knowledge to carry"; then
             warnings+=("任务回顾缺少「后续任务」或「知识传承」章节")
         fi
     fi
