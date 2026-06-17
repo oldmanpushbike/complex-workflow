@@ -4,14 +4,35 @@
 
 你在 Codex ↔ Claude 复杂项目工作流中的角色取决于谁发起：
 
+## 快速启动（所有场景的第一步）
+
+**第一次接触这个项目？** 执行这一步：
+
+```bash
+# 1. 检查当前是否有活跃功能
+ls workflow/features/*/feature-state.json 2>/dev/null
+
+# 2. 如果有活跃功能，运行调度器获取路由指令
+bash workflow/scripts/dispatch.sh <feature-id> --json
+
+# 3. 如果调度器输出 humanCheckpoint → 停下来，把 checkpoint 呈现给人类
+# 4. 如果调度器输出 nextAction → 严格照做，不要自行发挥
+```
+
 ## 模式识别
 
-问自己：
+进入会话后，问自己（按优先级）：
 
-- **人类让我启动一个新的功能吗？** → 你是**编排者**。
-- **Claude 交接了工作或请求了审查吗？** → 你是**挑战者/审查者**。
-- **状态文件（feature-state.json）将你路由到此会话吗？** → 进入 **dispatcher 模式**。
-  读取 `workflow/dispatcher.md`，由 `feature-state.json` 的 `orchestrator` 字段决定你的实际角色（编排者或挑战者），严格遵循调度器的路由指令。此模式下你的自主决策权受限——你是确定性执行器，而非自主 Agent。
+1. **状态文件将你路由到此会话吗？** → 进入 **dispatcher 模式**。
+   执行 `bash workflow/scripts/dispatch.sh <feature-id> --json`。
+   由 `feature-state.json` 的 `orchestrator` 字段决定你是编排者还是挑战者。
+   严格遵循输出的 `nextAction`——你是确定性执行器，不是自主 Agent。
+
+2. **人类让我启动一个新功能吗？** → 你是**编排者**。
+   先运行 `bash workflow/scripts/dispatch.sh`（它会识别没有活跃功能，输出 S0 创建指引）。
+
+3. **Claude 留下了交接文件吗？** → 你是**挑战者/审查者**。
+   读 `workflow/handoffs/claude-to-codex.md`，按 Claude 的要求行动。
 
 不确定时，阅读 `workflow/state-machine.md`、`workflow/dispatcher.md` 和当前的功能文件夹。
 
@@ -52,12 +73,37 @@ OpenSpec → grill-me(Claude) → skill-router → implement → review(Claude) 
 ### 编排者职责
 
 - 将 OpenSpec 制品作为唯一事实来源。
+- 每个状态转换前运行 `bash workflow/scripts/gate-check.sh <feature-id> --json`。
 - 当 Claude 可用时，将 grill-me 挑战路由给 Claude。
 - 构建任务-技能映射表并获得批准。
 - 实现已批准的任务（在此模式下你是主要实现者；Superpowers 可用时委托给它）。
-- 将实现发送给 Claude 进行审查。
+- 将实现发送给 Claude 进行审查。**写交接文件：** `workflow/handoffs/codex-to-claude.md`。
 - 运行验证并记录结果。
 - 完成时编写 ADR 和任务回顾。
+- S8 完成后运行 `bash workflow/experience/extract-lessons.sh <feature-id>` 提取经验。
+- 功能归档后运行 `python workflow/eval/score.py --feature <feature-id>` 生成质量评分。
+
+### 日常使用的脚本速查
+
+```bash
+# 每次会话第一步：搞清楚现在该干什么
+bash workflow/scripts/dispatch.sh <feature-id> --json
+
+# 状态转换前：检查门禁是否通过
+bash workflow/scripts/gate-check.sh <feature-id> --json
+
+# 修复状态文件：自动补齐缺失字段
+bash workflow/scripts/validate-state.sh <feature-id> --fix
+
+# 沉淀经验：从 retro 自动提取 Lesson
+bash workflow/experience/extract-lessons.sh <feature-id>
+
+# 质量评分：功能完成后跑分
+python workflow/eval/score.py --feature <feature-id>
+
+# CI 门禁：提交前检查
+bash workflow/scripts/ci-gate-guard.sh
+```
 
 ### 实现规则（作为编排者时）
 
@@ -110,6 +156,22 @@ Claude 是编排者。你的工作是压力测试和验证。
 - 关注 P0/P1 发现——正确性、安全性、断裂的契约。
 - 将发现写入对应的制品（grill-me 报告或审查文件）。
 
+### 挑战者脚本速查
+
+```bash
+# 第一步：确认当前状态和角色
+bash workflow/scripts/dispatch.sh <feature-id> --json
+
+# 检查产物完整性
+bash workflow/scripts/gate-check.sh <feature-id> --json
+
+# 如果是单Agent模式，检测 Claude 是否回来了
+# 读 workflow/resume-protocol.md 第二章的回归信号
+
+# 完成审查后，写审查报告到 reviews/codex-review.md
+# 确保包含 Final Review Decision
+```
+
 ### 审查立场
 
 默认持怀疑但建设性的态度。关注：
@@ -131,6 +193,43 @@ Claude 是编排者。你的工作是压力测试和验证。
 1. 记录你无法验证的内容。
 2. 建议 Claude 可运行的手动验证步骤。
 3. 将发现标记为 `needs-claude-verification`。
+
+---
+
+## 跨 Agent 通信：如何联系 Claude
+
+按顺序尝试三个通道：
+
+### 1. MCP（首选 — 实时工具调用）
+
+如果 Claude Code 配置了 MCP server，Codex 可以直接调用 Claude 的工具：
+
+```bash
+# 在 .codex/config.toml 中配置 Claude MCP server
+# 参考 .codex/config.example.toml
+
+# 通过 MCP 调用 Claude 做 grill-me 审查
+# Codex 通过 MCP tool call → Claude 返回审查结果
+```
+
+### 2. CLI（次选 — shell 调用）
+
+```bash
+# 把提案发给 Claude 审查
+cat workflow/features/<feature-id>/01-openspec-proposal.md | claude -p "grill-me 审查这份提案"
+
+# 把 diff 发给 Claude 做代码审查
+git diff main...HEAD | claude -p "审查这些变更，对照 workflow/features/<feature-id>/01-openspec-proposal.md"
+```
+
+### 3. 交接文件（最可靠 — 跨会话持久化）
+
+```bash
+# 写交接文件，Claude 下次会话时读取
+# 模板：workflow/handoffs/codex-to-claude.md
+```
+
+**若三个通道都失败 → 进入单 Agent 模式。** 按降级矩阵继续，绝不停止工作流。
 
 ---
 
